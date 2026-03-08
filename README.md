@@ -1,4 +1,59 @@
-# 🧠 Kaori N2G Core Features
+# Kaori N2G Core Features
+
+Brief technical documentation of the Narrative-to-Graph architecture for the Kaori Journaling Companion.
+
+---
+
+## Table of Contents
+
+1. [⚙️ How to Run](#️-how-to-run)  
+2. [🧠 Core Features](#-core-features)  
+   - [Temporal Context Awareness](#1-temporal-context-awareness)  
+   - [Multimodality of Entities](#2-multimodality-of-entities)  
+   - [Semantic Similarity Handler](#3-semantic-similarity-handler)  
+   - [Persistence & Deduplication](#4-persistence--deduplication)  
+   - [Relationship History](#5-relationship-history)  
+   - [Persistent LLM Caching](#6-persistent-llm-caching)  
+
+---
+
+## ⚙️ How to Run
+
+### 1. Environment Configuration
+
+Create a `.env` file in the root directory:
+
+```env
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=your_password
+OPENAI_API_KEY=your_api_key
+
+```
+
+### 2. Infrastructure Setup
+
+Start the Neo4j database using Docker Compose:
+
+```bash
+docker compose up -d
+
+```
+
+The Neo4j Browser will be accessible at `http://localhost:7474`.
+
+### 3. Application Execution
+
+Install dependencies and run the application using `uv`:
+
+```bash
+uv sync
+uv run main.py
+
+```
+
+---
+
+## 🧠 Core Features
 
 Brief technical documentation of the *Narrative-to-Graph* architecture for the Kaori Journaling Companion.
 
