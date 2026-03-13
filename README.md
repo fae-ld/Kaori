@@ -1,5 +1,14 @@
 # Kaori N2G Core Features
 
+```cypher
+CREATE VECTOR INDEX `rel_embedding_index`
+FOR ()-[r:DYNAMIC_RELATIONSHIP]-()
+ON (r.embedding)
+OPTIONS {indexConfig: {
+ `vector.dimensions`: 384,
+ `vector.similarity_function`: 'cosine'
+}}
+```
 Brief technical documentation of the Narrative-to-Graph architecture for the Kaori Journaling Companion.
 
 ---
