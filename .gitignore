@@ -14,3 +14,5 @@ wheels/
 *.db
 
 neo4j/
+
+temp/
