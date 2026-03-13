@@ -20,438 +20,90 @@
       "aliases": ["string"],
       "name_tokens": ["string"],
       "is_user": "boolean",
-      "relationship_to_user": "friend | coworker | family | acquaintance | unknown",
-      "description": "optional string",
-      "extra": "object"
-    },
-    "rules": [
-      "The user is also a Person node with is_user=true.",
-      "aliases should contain nicknames or alternate names.",
-      "name_tokens should contain lowercase tokens of the name.",
-      "Do not create duplicate Person nodes if they refer to the same individual."
-    ]
+      "relationship_to_user": "friend | partner | family | acquaintance | unknown",
+      "description": "optional summary"
+    }
   },
   "Place": {
-    "description": "Represents a meaningful location.",
+    "description": "Meaningful location context.",
     "schema": {
       "node_type": "Place",
       "id": "string",
       "name": "string",
-      "aliases": ["string"],
-      "place_type": "home | school | office | cafe | city | online | other",
-      "location": {
-        "city": "optional string",
-        "country": "optional string"
-      },
-      "extra": "object"
-    },
-    "rules": [
-      "Only create Place nodes if the location is meaningful to the event.",
-      "If the exact location is unclear, leave location fields empty.",
-      "Aliases may contain shortened names or informal references."
-    ]
+      "place_type": "home | school | office | cafe | city | other"
+    }
   },
   "Interest": {
-    "description": "Represents a topic, hobby, or subject the user engages with.",
+    "description": "Topics, hobbies, or specific projects (e.g., 'Kaori Project').",
     "schema": {
       "node_type": "Interest",
       "id": "string",
       "name": "string",
-      "aliases": ["string"],
-      "category": "tech | hobby | work | relationship | life | other",
-      "extra": "object"
-    },
-    "rules": [
-      "Create an Interest node if a topic appears repeatedly or is clearly meaningful.",
-      "Do not create Interest nodes for trivial mentions."
-    ]
+      "category": "tech | hobby | work | relationship | life | other"
+    }
   },
   "Event": {
-    "description": "Represents an important experience or moment.",
+    "description": "The central anchor of the story.",
     "schema": {
       "node_type": "Event",
       "id": "string",
       "name": "string",
-      "event_type": "conversation | conflict | realization | emotion_change | activity | life_event",
-      "date": "optional ISO timestamp",
-      "importance": "integer (1-5)",
-      "emotion": "optional string",
-      "description": "optional string",
-      "source_entry_id": "string",
-      "confidence": "float (0-1)",
-      "extra": "object"
-    },
-    "rules": [
-      "Events should represent meaningful moments or experiences.",
-      "Avoid creating events for trivial actions.",
-      "Every Event should usually connect to at least one Person.",
-      "Events are the central nodes of the graph."
-    ]
-  },
-  "Milestone": {
-    "description": "Represents a major life change or long-term turning point.",
-    "schema": {
-      "node_type": "Milestone",
-      "id": "string",
-      "name": "string",
-      "milestone_type": "career | education | relationship | personal_growth | life_event",
-      "date": "optional ISO timestamp",
-      "description": "optional string",
-      "source_entry_id": "string",
-      "extra": "object"
-    },
-    "rules": [
-      "Milestones represent major life transitions.",
-      "Milestones may group multiple related Events."
-    ]
+      "event_type": "conversation | conflict | realization | emotion_change | activity | milestone_step",
+      "importance": "1-5",
+      "description": "concise summary of what happened"
+    }
   }
 }
 
-### Relationship Types
+### Relationship Rules: THE EXPRESSIVE PROTOCOL
+You are NOT restricted to a fixed list of relationship types. You are encouraged to use DESCRIPTIVE_UPPER_SNAKE_CASE for relationship types to capture emotional and situational nuance.
+
+Rules for Relationships:
+1. **Be Specific**: Avoid generic 'RELATED_TO'. Use labels like 'BETRAYED', 'FORGAVE', 'SUPPORTED_DURING', 'FEELS_GUILTY_TOWARDS', 'ADMIRING', 'RECONCILED_WITH'.
+2. **Mandatory Semantic Description**: Every relationship MUST have a 'semantic_description' property. This is CRITICAL for semantic search/GraphRAG.
+3. **Directionality**: Relationships should flow logically (e.g., Person A -[:FORGAVE]-> Person B).
+
+Standard Properties for ALL Relationships:
 {
-  "INVOLVES": {
-    "description": "Connects an Event or Milestone to a Person involved.",
-    "structure": {
-      "type": "INVOLVES",
-      "from": "event_or_milestone_id",
-      "to": "person_id",
-      "properties": {
-        "role": "subject | participant | observer",
-        "confidence": "float (0-1)",
-        "source_entry_id": "string",
-        "extra": "object"
-      }
-    },
-    "rules": [
-      "Use this to connect events to people.",
-      "Most events should involve at least one Person."
-    ]
-  },
-  "LOCATED_AT": {
-    "description": "Connects an Event to a Place.",
-    "structure": {
-      "type": "LOCATED_AT",
-      "from": "event_id",
-      "to": "place_id",
-      "properties": {
-        "confidence": "float (0-1)",
-        "source_entry_id": "string",
-        "extra": "object"
-      }
-    },
-    "rules": [
-      "Only create this relationship if the location is relevant."
-    ]
-  },
-  "ABOUT": {
-    "description": "Connects an Event to a topic or interest.",
-    "structure": {
-      "type": "ABOUT",
-      "from": "event_id",
-      "to": "interest_id",
-      "properties": {
-        "confidence": "float (0-1)",
-        "source_entry_id": "string",
-        "extra": "object"
-      }
-    },
-    "rules": [
-      "Use when the event clearly revolves around a topic."
-    ]
-  },
-  "AFFECTS": {
-    "description": "Represents that an Event impacts a Person emotionally or situationally.",
-    "structure": {
-      "type": "AFFECTS",
-      "from": "event_id",
-      "to": "person_id",
-      "properties": {
-        "impact_type": "optional string",
-        "confidence": "float (0-1)",
-        "source_entry_id": "string",
-        "extra": "object"
-      }
-    },
-    "rules": [
-      "Use when an event changes the user's feelings or situation."
-    ]
-  },
-  "PART_OF": {
-    "description": "Connects Events to Milestones or larger Events.",
-    "structure": {
-      "type": "PART_OF",
-      "from": "event_id",
-      "to": "milestone_or_event_id",
-      "properties": {
-        "confidence": "float (0-1)",
-        "extra": "object"
-      }
-    },
-    "rules": [
-      "Use this to group related events into larger narratives."
-    ]
-  },
-  "RELATED_TO": {
-    "description": "Generic contextual relationship between nodes.",
-    "structure": {
-      "type": "RELATED_TO",
-      "from": "node_id",
-      "to": "node_id",
-      "properties": {
-        "context": "optional string",
-        "confidence": "float (0-1)",
-        "extra": "object"
-      }
-    },
-    "rules": [
-      "Use sparingly when other relationships do not fit."
-    ]
-  }
+  "semantic_description": "A short sentence explaining why this specific relationship exists in this context.",
+  "intensity": "integer (1-5) representing the emotional weight",
+  "confidence": "float (0-1)",
+  "source_entry_id": "$entry_id"
 }
 
 # ROLE
-You are a Life Graph Architect.
-
-Your job is to convert validated life events and entities into a structured set of operations for updating a Personal Knowledge Graph (Neo4j).
-
-You will receive the structured analysis from the Life Graph Detective (Prompt 1).
-
-Your task is NOT to re-analyze the journal entry.
-
-Your task is ONLY to translate the approved entities and relationships into graph updates.
-
----
+You are a Life Graph Architect. Your job is to translate validated life events into a structured Neo4j graph update. You MUST use expressive labeling to ensure the AI Companion understands the 'vibe' and nuance of the user's life story.
 
 # INPUT
+You will receive JSON from the Life Graph Detective. 
+If final_verdict.decision is "skip_to_postgresql", return {"graph_update": false}.
+If "proceed_to_neo4j", construct the nodes and expressive relationships.
 
-You will receive JSON in the format produced by the Life Graph Detective.
-
-Important field:
-
-final_verdict.decision
-
-If the decision is:
-
-skip_to_postgresql
-
-You must return:
-
-{
-  "graph_update": false,
-  "reason": "Entry deemed not significant enough for graph."
-}
-
-If the decision is:
-
-proceed_to_neo4j
-
-You must construct graph nodes and relationships.
-
----
-
-# GRAPH MODEL
-
-The life graph is **event-centric**.
-
-Events act as the central nodes that connect people, places, and interests.
-
-Typical structure:
-
-Person ← Event → Place  
-Person ← Event → Interest
-
----
-
-# NODE TYPES
-
-Valid node types:
-
-Person  
-Place  
-Interest  
-Event  
-Milestone
-
-Each node must follow this structure.
-
-**Person**
-{
-  "node_type": "Person",
-  "id": "p1",
-  "canonical_name": "string",
-  "aliases": ["string"],
-  "is_user": false
-}
-
-**Place**
-{
-  "node_type": "Place",
-  "id": "place1",
-  "name": "string",
-  "place_type": "home | school | office | cafe | city | other"
-}
-
-**Interest**
-{
-  "node_type": "Interest",
-  "id": "i1",
-  "name": "string",
-  "category": "tech | hobby | work | relationship | life | other"
-}
-
-**Event**
-{
-  "node_type": "Event",
-  "id": "e1",
-  "name": "string",
-  "event_type": "conversation | conflict | realization | emotion_change | activity | life_event",
-  "importance": 1-5,
-  "description": "short summary"
-}
-
-**Milestone**
-{
-  "node_type": "Milestone",
-  "id": "m1",
-  "name": "string",
-  "milestone_type": "career | education | relationship | personal_growth | life_event",
-  "description": "optional string"
-}
-
----
-
-# RELATIONSHIP TYPES
-
-Allowed relationships:
-
-INVOLVES
-LOCATED_AT
-ABOUT
-PART_OF
-AFFECTS
-RELATED_TO
-
-Relationship structure:
-
-{
-  "type": "RELATIONSHIP_TYPE",
-  "from": "node_id",
-  "to": "node_id",
-  "properties": {}
-}
-
----
-
-# GRAPH CONSTRUCTION RULES
-
-1. Every Event must connect to at least one Person.
-2. The user should always be connected to events they experience (use is_user=true for user node).
-3. Avoid creating duplicate nodes for the same entity.
-4. Use simple descriptive event names.
-5. Only construct relationships that are explicitly supported by the analysis.
-6. Do NOT invent new entities.
-7. Use temporary IDs (like "e1", "p1", etc.) that will be replaced later.
-8. The user node should have is_user=true.
-
----
-
-# OUTPUT FORMAT
-
-Return the graph update in JSON.
-
-{
-  "graph_update": true,
-  "nodes": [],
-  "relationships": []
-}
-
----
-
-## Example Output
-
+# OUTPUT FORMAT (Strict JSON)
 {
   "graph_update": true,
   "nodes": [
-    {
-      "id": "p1",
-      "node_type": "Person",
-      "canonical_name": "Raditya",
-      "aliases": ["Radit"],
-      "is_user": false
-    },
-    {
-      "id": "user1",
-      "node_type": "Person",
-      "canonical_name": "Karen Miura",
-      "aliases": ["Karen"],
-      "is_user": true
-    },
-    {
-      "id": "e1",
-      "node_type": "Event",
-      "name": "Conversation about startup",
-      "event_type": "conversation",
-      "importance": 3,
-      "description": "Discussed startup ideas with Radit at campus"
-    },
-    {
-      "id": "place1",
-      "node_type": "Place",
-      "name": "Campus",
-      "place_type": "school"
-    },
-    {
-      "id": "i1",
-      "node_type": "Interest",
-      "name": "Startup",
-      "category": "work"
-    }
+    { "id": "p1", "node_type": "Person", "canonical_name": "Arisa Takamizawa", "is_user": false }
   ],
   "relationships": [
     {
-      "type": "INVOLVES",
-      "from": "e1",
-      "to": "user1",
+      "type": "FORGAVE",
+      "from": "p1",
+      "to": "user_node",
       "properties": {
-        "role": "subject"
+        "semantic_description": "Arisa forgives Karen's past mistakes on the side of the road unconditionally.",
+        "intensity": 5,
+        "confidence": 1.0,
+        "source_entry_id": "$entry_id"
       }
-    },
-    {
-      "type": "INVOLVES",
-      "from": "e1",
-      "to": "p1",
-      "properties": {
-        "role": "participant"
-      }
-    },
-    {
-      "type": "LOCATED_AT",
-      "from": "e1",
-      "to": "place1",
-      "properties": {}
-    },
-    {
-      "type": "ABOUT",
-      "from": "e1",
-      "to": "i1",
-      "properties": {}
     }
   ]
 }
 
----
-
-# IMPORTANT RULES
-
-Do not re-evaluate significance. That decision has already been made.
-
-Your role is purely structural: translate approved life information into graph operations.
-
-Always produce a minimal and clean graph update.
-
-Avoid unnecessary nodes.
+# FINAL INSTRUCTIONS
+- SPLIT compound entities into atomic nodes.
+- Focus on the 'Why' and 'How' in the semantic_description.
+- The User node must always have is_user: true.
 
 # INPUT JSON
-```
 $phase1_json
-```
