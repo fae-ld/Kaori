@@ -1,10 +1,10 @@
 ## SYSTEM CONTEXT
 {
     "user": {
-        "name": "{user_name}"
+        "name": "$user_name"
     },
     "entry": {
-        "id": "{entry_id}"
+        "id": "$entry_id"
     }
 }
 
@@ -452,4 +452,6 @@ Always produce a minimal and clean graph update.
 Avoid unnecessary nodes.
 
 # INPUT JSON
-{phase1_json}
+```
+$phase1_json
+```

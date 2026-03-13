@@ -1,7 +1,7 @@
 ### USER CONTEXT
 {
-    "name": "{user_name}",
-    "aliases": {user_aliases}
+    "name": "$user_name",
+    "aliases": $user_aliases
 }
 
 # INSTRUCTIONS
@@ -152,4 +152,4 @@ Return your analysis in this JSON structure:
     - "Beny & Sudes" -> SPLIT into ["Beny", "Sudes"]
 
 ## ENTRY TEXT
-{entry_text}
+$entry_text
