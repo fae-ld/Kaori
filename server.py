@@ -9,11 +9,13 @@ from typing import List, Dict, Any
 import json
 import os
 from datetime import datetime
+from tqdm.auto import tqdm
 
 from config import config
 from openrouter_client import get_openrouter_client, close_openrouter_client
 from neo4j_client import get_neo4j_client, close_neo4j_client
 from prompt_manager import get_prompt_manager
+from vectorizer import Vectorizer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +32,7 @@ class Neo4jMemoryServer:
         self.openrouter = get_openrouter_client()
         self.neo4j = get_neo4j_client()
         self.prompts = get_prompt_manager()
+        self.vectorizer = Vectorizer()
     
     async def initialize(self):
         """Initialize connections"""
@@ -184,6 +187,27 @@ class Neo4jMemoryServer:
         if not phase2_result.get("graph_update", False):
             return phase2_result
         
+        entity_map = {node["id"]: node["canonical_name"] for node in phase2_result.get("nodes", [])}
+
+        if "relationships" in phase2_result:
+            for rel in tqdm(phase2_result["relationships"], desc="Vectorizing relationships"):
+                from_node_name = entity_map.get(rel["from"])
+                to_node_name = entity_map.get(rel["to"])
+
+                desc_phase1 = next(
+                    (r["description"] for r in phase1_result.get("relationships", []) 
+                    if r["source"] == from_node_name and r["target"] == to_node_name),
+                    ""
+                )
+                
+                desc_phase2 = rel["properties"].get("description", "")
+
+                text_to_embed = f"Relationship from {from_node_name} to {to_node_name}: {desc_phase1}. {desc_phase2}"
+                rel["properties"]["embedding"] = self.vectorizer.encode(text_to_embed)
+
+        # DEBUGGING PURPOSES
+        await self._save_to_temp(entry_id, "phase2_output_vectorized", phase2_result)
+
         # Apply to Neo4j
         neo4j_result = await self._apply_to_neo4j(phase2_result, entry_id)
         
