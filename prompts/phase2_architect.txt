@@ -65,7 +65,7 @@ Rules for Relationships:
 
 Standard Properties for ALL Relationships:
 {
-  "semantic_description": "A short sentence explaining why this specific relationship exists in this context.",
+  "description": "A short sentence explaining why this specific relationship exists in this context.",
   "intensity": "integer (1-5) representing the emotional weight",
   "confidence": "float (0-1)",
   "source_entry_id": "$entry_id"
@@ -91,7 +91,7 @@ If "proceed_to_neo4j", construct the nodes and expressive relationships.
       "from": "p1",
       "to": "user_node",
       "properties": {
-        "semantic_description": "Arisa forgives Karen's past mistakes on the side of the road unconditionally.",
+        "description": "Arisa forgives Karen's past mistakes on the side of the road unconditionally.",
         "intensity": 5,
         "confidence": 1.0,
         "source_entry_id": "$entry_id"
