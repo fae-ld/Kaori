@@ -187,7 +187,7 @@ class Neo4jMemoryServer:
         if not phase2_result.get("graph_update", False):
             return phase2_result
         
-        entity_map = {node["id"]: node["canonical_name"] for node in phase2_result.get("nodes", [])}
+        entity_map = {node["id"]: node["name"] for node in phase2_result.get("nodes", [])}
 
         if "relationships" in phase2_result:
             for rel in tqdm(phase2_result["relationships"], desc="Vectorizing relationships"):
@@ -205,8 +205,12 @@ class Neo4jMemoryServer:
                 text_to_embed = f"Relationship from {from_node_name} to {to_node_name}: {desc_phase1}. {desc_phase2}"
                 rel["properties"]["embedding"] = self.vectorizer.encode(text_to_embed)
 
+        logger.info("Vectorizing done, now attempt to save it")
+
         # DEBUGGING PURPOSES
         await self._save_to_temp(entry_id, "phase2_output_vectorized", phase2_result)
+
+        logger.info("Vectorized saved, now processing to neo")
 
         # Apply to Neo4j
         neo4j_result = await self._apply_to_neo4j(phase2_result, entry_id)

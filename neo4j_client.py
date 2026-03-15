@@ -101,12 +101,12 @@ class Neo4jClient:
                 
                 logger.debug(f"Created relationship: {rel['type']}")
     
-    async def find_existing_person(self, canonical_name: str) -> Optional[Dict]:
+    async def find_existing_person(self, name: str) -> Optional[Dict]:
         """Find existing person by canonical name"""
         async with self.driver.session() as session:
             result = await session.run(
-                "MATCH (p:Person {canonical_name: $name}) RETURN p",
-                name=canonical_name
+                "MATCH (p:Person {name: $name}) RETURN p",
+                name=name
             )
             record = await result.single()
             return dict(record["p"]) if record else None
@@ -123,7 +123,7 @@ class Neo4jClient:
     async def get_person_events(self, person_name: str) -> List[Dict]:
         """Get all events involving a person"""
         cypher = """
-        MATCH (p:Person {canonical_name: $name})<-[:INVOLVES]-(e:Event)
+        MATCH (p:Person {name: $name})<-[:INVOLVES]-(e:Event)
         OPTIONAL MATCH (e)-[:ABOUT]->(i:Interest)
         OPTIONAL MATCH (e)-[:LOCATED_AT]->(pl:Place)
         RETURN e, collect(DISTINCT i) as interests, collect(DISTINCT pl) as places
