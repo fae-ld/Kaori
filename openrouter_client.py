@@ -4,6 +4,9 @@ import json
 import logging
 from typing import Dict, Any, Optional
 from config import config
+import aiofiles
+from datetime import datetime
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,20 @@ class OpenRouterClient:
             )
             response.raise_for_status()
             result = response.json()
+
+            try:
+                temp_dir = Path("temp")
+                temp_dir.mkdir(exist_ok=True)
+
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                filename = temp_dir / f"response_{timestamp}.json"
+
+                async with aiofiles.open(filename, mode='w', encoding='utf-8') as f:
+                    await f.write(json.dumps(result, indent=4))
+                
+                logger.debug(f"Response saved to {filename}")
+            except Exception as save_error:
+                logger.warning(f"Failed to save temp file: {save_error}")
 
             if not result.get("choices"):
                 logger.error(f"OpenRouter returned no choices: {result}")
