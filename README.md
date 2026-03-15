@@ -35,7 +35,8 @@ Create a `.env` file in the root directory:
 ```env
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=your_password
-OPENAI_API_KEY=your_api_key
+OPENROUTER_API_KEY=your_api_key
+OPENROUTER_MODEL=anthropic/claude-3.5-sonnet  # optional
 
 ```
 
@@ -57,40 +58,55 @@ Install dependencies and run the application using `uv`:
 ```bash
 uv sync
 uv run main.py
-
 ```
+
+or run the MCP server directly:
+
+```bash
+uv run server.py
+```
+
+---
+
+## 📁 Project Layout (main files and folders)
+
+- `prompts/phase1_detective.txt`: phase 1 prompt template (LLM detective)
+- `prompts/phase2_architect.txt`: phase 2 prompt template (LLM architect)
+- `config.py`: environment config (Neo4j, OpenRouter, server host/port)
+- `docker-compose.yml`: Neo4j container with APOC plugin and local data volume
+- `neo4j_client.py`: async Neo4j graph operations (nodes/relationships/query)
+- `openrouter_client.py`: OpenRouter API wrapper + response caching
+- `prompt_manager.py`: prompt templating and substitution engine
+- `server.py`: MCP server implementation with `process_journal_entry`, `query_graph`, `get_person_summary`
+- `test_client.py` (temporary): MCP client for integration testing
+- `vectorizer.py`: sentence embedding (SentenceTransformer) helper
 
 ---
 
 ## 🧠 Core Features
 
-Brief technical documentation of the *Narrative-to-Graph* architecture for the Kaori Journaling Companion.
+This project currently implements the following behavior in the core modules:
+
+- `process_journal_entry` tool in `server.py`: coordinates phase 1 and phase 2 prompts, handles LLM calls, vectorizes relationship context, and writes nodes/relationships into Neo4j.
+- `prompt_manager.py`: templates phase 1 and phase 2 prompt files in `prompts/` and fills placeholders (`user_name`, `user_aliases`, `entry_text`, etc.).
+- `openrouter_client.py`: async OpenRouter chat completion client with robust JSON extraction and local `temp/response_*.json` logging.
+- `neo4j_client.py`: async graph operations (connection, create nodes/relationships, query, person timeline, person events, summary).
+- `vectorizer.py`: sentence embeddings via `SentenceTransformer` (`all-MiniLM-L6-v2`) with CPU/GPU detection.
+- `test_client.py`: integration test harness for MCP server operations (list tools, call tool, check timeline results).
+- `docker-compose.yml`: local Neo4j container configuration including APOC plugin and data volume persistence.
+
+### Workflows
+
+1. Take user journal entry (`entry_text`) → phase 1 prompt (detective analysis).
+2. If graph update is approved → phase 2 prompt (architect graph structure output).
+3. Phase 2 nodes/relationships are vectorized and committed to Neo4j.
+4. Graph querying from tool API: `query_graph` (timeline/person_events/custom) and `get_person_summary`.
+
+### Current limitations
+
+- No explicit entity deduplication / sophisticated canonicalization in current graph API beyond basic node insertion.
+- No built-in JSON schema validation beyond minimal MCP input schema in `server.py`.
+- LLM output is expected to be well-formed JSON (openrouter client has best-effort extraction).
 
 ---
-
-### 1. Temporal Context Awareness
-**Absolute vs. Relative Time.** Automatically normalizes relative time references (e.g., "yesterday", "last week") into absolute ISO dates (YYYY-MM-DD) by using the journal entry's *anchor date* as a reference.
-> *Prevents Temporal Chaos in chronological queries.*
-
-### 2. Multimodality of Entities
-**Dynamic Labeling.** Supports multiple labels for a single node (e.g., `:Entity`, `:Person`, `:Teacher`) without duplication. Uses APOC to inject specific labels dynamically based on the LLM’s contextual extraction.
-
-### 3. Semantic Similarity Handler
-**Relation Normalization.** Utilizes *cosine similarity* on text embeddings to consolidate relations that are textually different but semantically identical (e.g., mapping `Instructed` → `TEACHES`).
-
-
-
-### 4. Persistence & Deduplication
-**Existing Entity Check.** Ensures memory continuity by validating new entities against existing data using `MERGE` logic and entity resolution to prevent redundant nodes (e.g., "Satoru" vs "Gojo").
-
-### 5. Relationship History
-**Subjectivity Tracking.** Records shifts in emotions or relationship status within a `history` array stored as JSON strings on the relationship itself.
-> *Enables the Companion to track transitions, such as 'Admired' in 2025 to 'Annoyed' in 2026.*
-
-
-
-### 6. Persistent LLM Caching
-**SQLite Integration.** Implements SHA-256 hashing on prompts to store LLM responses in a local `llm_cache.db`. This significantly speeds up testing and minimizes API costs.
-
----
-**Tech Stack:** Neo4j (APOC), Step-3.5-Flash, SQLite3, OpenAI Embeddings, Python (uv).
+**Tech Stack:** Neo4j, OpenRouter, Neo4j Python driver, MCP server/client, SentenceTransformer, Docker Compose.
