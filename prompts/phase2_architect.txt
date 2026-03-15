@@ -16,7 +16,7 @@
     "schema": {
       "node_type": "Person",
       "id": "string",
-      "canonical_name": "string",
+      "name": "string",
       "aliases": ["string"],
       "name_tokens": ["string"],
       "is_user": "boolean",
@@ -62,6 +62,7 @@ Rules for Relationships:
 1. **Be Specific**: Avoid generic 'RELATED_TO'. Use labels like 'BETRAYED', 'FORGAVE', 'SUPPORTED_DURING', 'FEELS_GUILTY_TOWARDS', 'ADMIRING', 'RECONCILED_WITH'.
 2. **Mandatory Semantic Description**: Every relationship MUST have a 'semantic_description' property. This is CRITICAL for semantic search/GraphRAG.
 3. **Directionality**: Relationships should flow logically (e.g., Person A -[:FORGAVE]-> Person B).
+4. **Multi-Relational Requirement**: A single interaction may carries multiple emotional or social weights. You MUST identify and extract multiple relationships between the same two nodes if the context supports it. For example, if Person A rejects Person B because they feel unworthy, create both a REJECTED and a FEELS_UNWORTHY_OF relationship. Do not collapse distinct emotional nuances into a single generic type.
 
 Standard Properties for ALL Relationships:
 {
@@ -79,21 +80,33 @@ You will receive JSON from the Life Graph Detective.
 If final_verdict.decision is "skip_to_postgresql", return {"graph_update": false}.
 If "proceed_to_neo4j", construct the nodes and expressive relationships.
 
-# OUTPUT FORMAT (Strict JSON)
+# OUTPUT FORMAT (Strict JSON) (Example)
 {
   "graph_update": true,
   "nodes": [
-    { "id": "p1", "node_type": "Person", "canonical_name": "Arisa Takamizawa", "is_user": false }
+    { "id": "p1", "node_type": "Person", "name": "Arisa Takamizawa", "is_user": false },
+    { "id": "u1", "node_type": "Person", "name": "$user_name", "is_user": true }
   ],
   "relationships": [
     {
       "type": "FORGAVE",
       "from": "p1",
-      "to": "user_node",
+      "to": "u1",
       "properties": {
-        "description": "Arisa forgives Karen's past mistakes on the side of the road unconditionally.",
+        "description": "Arisa unconditionally forgave the user's past betrayal.",
         "intensity": 5,
         "confidence": 1.0,
+        "source_entry_id": "$entry_id"
+      }
+    },
+    {
+      "type": "VALIDATED_FEELINGS",
+      "from": "p1",
+      "to": "u1",
+      "properties": {
+        "description": "Arisa acknowledged that the user's fear was a valid human response.",
+        "intensity": 4,
+        "confidence": 0.9,
         "source_entry_id": "$entry_id"
       }
     }
@@ -101,9 +114,13 @@ If "proceed_to_neo4j", construct the nodes and expressive relationships.
 }
 
 # FINAL INSTRUCTIONS
-- SPLIT compound entities into atomic nodes.
-- Focus on the 'Why' and 'How' in the semantic_description.
-- The User node must always have is_user: true.
+- Exhaustive Extraction (Multi-Relational): Aim for high recall. If an entry mentions both a feeling and an action, or multiple emotional layers (e.g., betrayal and guilt), create a separate relationship for each.
+- Semantic Nuance: Use the description property to explain the specific "Why" and "How" of each relationship. This is critical to differentiate similar types (e.g., AVOIDED due to fear vs. AVOIDED due to shame).
+- Atomic Node Splitting: SPLIT compound entities into atomic nodes. Ensure complex descriptions are broken down (e.g., separating a Person from the specific Event or Interest they are linked to).
+- User Integrity: The User node must always be identified with is_user: true.
+- Consistency: Ensure every relationship has an intensity and confidence score reflecting the weight of the story.
 
 # INPUT JSON
+```json
 $phase1_json
+```
