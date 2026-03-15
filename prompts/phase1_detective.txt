@@ -27,23 +27,30 @@ State your initial verdict: "This feels like a [daily moment | life reflection |
 Identify all potential entities that could become nodes in the graph.
 
 For each entity, note:
-- **Entity**: The name or identifier
+- **Entity**: The name or identifier (MUST be EXACTLY as mentioned in text)
 - **Type**: PERSON | PLACE | INTEREST | MILESTONE | EVENT
-- **Significance**: Why might this matter? (e.g., "First mention of mother", "Recurring friend from multiple entries", "Potential new hobby")
+- **Mentioned as**: Quote the exact phrase from the entry
+- **Significance**: Why might this matter? (e.g., "First mention of mother", "Recurring friend", "Potential new hobby")
+- **Confidence**: HIGH (explicitly named) | MEDIUM (implied but clear) | LOW (vague reference)
 
-Add an **Observation** at the end: Are entities recurring or one-off? Are they named or anonymous?
-
-Format as a table.
-
+**CRITICAL: Only include entities that are explicitly mentioned or clearly implied in the text.**
+**If an entity is anonymous (e.g., "someone", "a friend"), do NOT create a node unless they have persistent identity across entries.**
 ---
 
 ### 3. RELATIONAL DEPTH
-Look for relationships between entities:
-- Who is connected to whom?
-- Is the relationship simple (e.g., "met someone") or complex (e.g., "mentor who changed my perspective, then drifted apart")?
-- Does the relationship evolve within the entry?
+Identify explicit and implicit relationships between entities with PRECISE DIRECTION:
 
-Note any relationships that feel significant, even if implicit.
+For EACH relationship, determine:
+- **Source**: Who is the subject/initiator/experiencer?
+- **Target**: Who is the object/receiver?
+- **Directionality**: Is this one-way (A → B) or mutual (A ↔ B)?
+- **Evidence**: Quote the exact text that supports this direction
+- **Evolution**: Does the relationship change within the entry?
+
+**CRITICAL: Never guess direction. If the text says "X admired Y", the relationship is X → Y, not Y → X.**
+**If direction is unclear, mark as "undirected" and explain why.**
+
+Note any relationships that feel significant, even if implicit, but be explicit about the evidence.
 
 ---
 
@@ -125,6 +132,7 @@ Return your analysis in this JSON structure:
       {
         "component": "string",
         "decision": "YES|SKIP|HOLD",
+        "direction_evidence": "string",
         "reason": "string"
       }
     ],
@@ -141,15 +149,47 @@ Return your analysis in this JSON structure:
 - For daily entries with no lasting significance, it's okay to skip everything.
 - When in doubt, ask: "Will the user care about this entity/relationship 5 years from now?"
 - Do not create entities for anonymous references like: "someone", "a friend", "a person", unless identity is persistent.
-- YOU MUST SPLIT COMPOUND ENTITIES INTO ATOMIC NODES. 
-- NEVER output combined strings like "Matematika dan Machine Learning" as one entity 
-- ALWAYS output separate nodes for each distinct entity. Each node must represent ONE thing. 
+- For EVERY relationship, you MUST include the text evidence that supports the direction.
+- If you cannot find explicit evidence for direction, set direction = "undirected" and explain why.
+- Never infer personal feelings unless explicitly stated (e.g., "I love" vs "she is loved by many").
+- **DIRECTION RULE**: The source MUST be the one doing the action/feeling. If X admires Y, source = X, target = Y.
+- **EVIDENCE RULE**: Every relationship MUST have a "direction_evidence" field quoting the exact text.
+- **WHEN IN DOUBT**: If the text is ambiguous about direction, set direction_evidence to "AMBIGUOUS: [explain]" and set significance = "undirected".
+- **SPLITTING RULE**: Always split compound entities, but preserve the original text in "mentioned_as" field.
+- **CONTEXT RULE**: Consider the entire entry, not just isolated sentences, when determining direction.
+- NEVER output combined strings like "Matematika dan Machine Learning" as one entity, ALWAYS output separate nodes for each distinct entity. Each node must represent ONE thing. 
 - If you see:
     - "Matematika dan Machine Learning" → SPLIT into ["Matematika", "Machine Learning"]
     - "Jogja & Bandung" → SPLIT into ["Jogja", "Bandung"]  
     - "ML/AI/Data Science" → SPLIT into ["ML", "AI", "Data Science"]
     - "hiking, swimming, reading" → SPLIT into ["hiking", "swimming", "reading"]
     - "Beny & Sudes" -> SPLIT into ["Beny", "Sudes"]
+
+## EXAMPLE
+Entry text: "Chisa selalu mengagumi Karen dari jauh. Aku melihat Karen mulai menerima kehadiran Chisa."
+
+❌ SALAH:
+{
+  "source": "Karen",
+  "target": "Chisa", 
+  "description": "Karen menerima Chisa sebagai teman"
+}
+
+✅ BENAR:
+{
+  "source": "Chisa",
+  "target": "Karen",
+  "description": "Chisa mengagumi Karen dari jauh",
+  "direction_evidence": "Chisa selalu mengagumi Karen dari jauh",
+  "significance": "simple"
+},
+{
+  "source": "Karen", 
+  "target": "Chisa",
+  "description": "Karen mulai menerima kehadiran Chisa",
+  "direction_evidence": "Karen mulai menerima kehadiran Chisa",
+  "significance": "evolving"
+}
 
 ## ENTRY TEXT
 $entry_text
