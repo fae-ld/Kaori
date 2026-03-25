@@ -1,6 +1,6 @@
 # prompt_manager.py
 import os
-from typing import Dict, Any
+from typing import Dict, Any, List
 import json
 from string import Template
 
@@ -31,15 +31,18 @@ class PromptManager:
             entry_text=entry_text
         )
     
-    def get_phase2_prompt(self, phase1_result: Dict, entry_id: str, user_name: str) -> str:
-        """Get formatted phase 2 prompt"""
+    def get_phase2_prompt(self, phase1_result: Dict, entry_id: str, user_name: str, graph_context: List = None) -> str:
+        """Get formatted phase 2 prompt with manual graph context"""
         template = self._load_prompt("phase2_architect.txt")
         t = Template(template)
+        
+        graph_context_json = json.dumps(graph_context, indent=2) if graph_context else "[]"
         
         return t.safe_substitute(
             user_name=user_name,
             entry_id=entry_id,
-            phase1_json=json.dumps(phase1_result, indent=2)
+            phase1_json=json.dumps(phase1_result, indent=2),
+            graph_context=graph_context_json 
         )
 
 # Singleton instance
