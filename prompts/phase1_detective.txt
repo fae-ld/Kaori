@@ -21,6 +21,17 @@ Read the entry and form an initial hypothesis:
 
 State your initial verdict: "This feels like a [daily moment | life reflection | something in between]."
 
+### 1.5 TEMPORAL ANCHORING
+Identify the timeline of the events described:
+- **Reference Time**: What is the "now" of this entry? (e.g., "Hari ini", "Malam ini")
+- **Event Time (ET)**: When did the specific action/feeling occur?
+- **Temporal Markers**: Look for keywords like "dulu", "pas SMP", "bertahun-tahun lalu", "kemarin", "tadi".
+- **Time Slot**: Categorize each event/relationship into: 
+  - DISTANT_PAST (e.g., SMP)
+  - RECENT_PAST (e.g., A few days ago)
+  - CURRENT (Today's entry)
+  - FUTURE_INTENT (Plans/Dreams)
+
 ---
 
 ### 2. ENTITY SPOTTING
@@ -34,6 +45,7 @@ For each entity, note:
 - **Confidence**: HIGH (explicitly named) | MEDIUM (implied but clear) | LOW (vague reference)
 
 **CRITICAL: Only include entities that are explicitly mentioned or clearly implied in the text.**
+**RULE: Use ONLY the name written in the text. If the text says "Kei," never write "Kei Tanaka" in the entity field. Don't try to be clever; be literal.**
 **If an entity is anonymous (e.g., "someone", "a friend"), do NOT create a node unless they have persistent identity across entries.**
 ---
 
@@ -45,7 +57,8 @@ For EACH relationship, determine:
 - **Target**: Who is the object/receiver?
 - **Directionality**: Is this one-way (A → B) or mutual (A ↔ B)?
 - **Evidence**: Quote the exact text that supports this direction
-- **Evolution**: Does the relationship change within the entry?
+- **Evolution and Sequence**: Does this continue, change, or complete a pre-existing relationship?
+- **Temporal Anchor**: When did this happen? (Choose: PAST for flashback/past, or PRESENT for today's events in the journal)
 
 **CRITICAL: Never guess direction. If the text says "X admired Y", the relationship is X → Y, not Y → X.**
 **If direction is unclear, mark as "undirected" and explain why.**
@@ -98,6 +111,7 @@ Return your analysis in this JSON structure:
     "table": [
       {
         "entity": "string",
+        "is_user": "bool",
         "type": "PERSON|PLACE|INTEREST|MILESTONE|EVENT",
         "significance": "string"
       }
@@ -110,6 +124,8 @@ Return your analysis in this JSON structure:
         "source": "string",
         "target": "string",
         "description": "string",
+        "temporal_anchor": "PAST|CURRENT",
+        "direction_evidence": "string",
         "significance": "simple|complex|evolving"
       }
     ],
@@ -157,39 +173,9 @@ Return your analysis in this JSON structure:
 - **WHEN IN DOUBT**: If the text is ambiguous about direction, set direction_evidence to "AMBIGUOUS: [explain]" and set significance = "undirected".
 - **SPLITTING RULE**: Always split compound entities, but preserve the original text in "mentioned_as" field.
 - **CONTEXT RULE**: Consider the entire entry, not just isolated sentences, when determining direction.
-- NEVER output combined strings like "Matematika dan Machine Learning" as one entity, ALWAYS output separate nodes for each distinct entity. Each node must represent ONE thing. 
-- If you see:
-    - "Matematika dan Machine Learning" → SPLIT into ["Matematika", "Machine Learning"]
-    - "Jogja & Bandung" → SPLIT into ["Jogja", "Bandung"]  
-    - "ML/AI/Data Science" → SPLIT into ["ML", "AI", "Data Science"]
-    - "hiking, swimming, reading" → SPLIT into ["hiking", "swimming", "reading"]
-    - "Beny & Sudes" -> SPLIT into ["Beny", "Sudes"]
-
-## EXAMPLE
-Entry text: "Chisa selalu mengagumi Karen dari jauh. Aku melihat Karen mulai menerima kehadiran Chisa."
-
-❌ SALAH:
-{
-  "source": "Karen",
-  "target": "Chisa", 
-  "description": "Karen menerima Chisa sebagai teman"
-}
-
-✅ BENAR:
-{
-  "source": "Chisa",
-  "target": "Karen",
-  "description": "Chisa mengagumi Karen dari jauh",
-  "direction_evidence": "Chisa selalu mengagumi Karen dari jauh",
-  "significance": "simple"
-},
-{
-  "source": "Karen", 
-  "target": "Chisa",
-  "description": "Karen mulai menerima kehadiran Chisa",
-  "direction_evidence": "Karen mulai menerima kehadiran Chisa",
-  "significance": "evolving"
-}
+- NEVER output combined strings (e.g, "Matematika dan Machine Learning" as one entity, this is forbidden), ALWAYS output separate nodes for each distinct entity. Each node must represent ONE thing. 
 
 ## ENTRY TEXT
+```
 $entry_text
+```
