@@ -122,10 +122,11 @@ class Neo4jMemoryServer:
         timestamp = datetime.now().strftime("%H%M%S")
         ext = "json" if is_json else "txt"
         filename = f"{entry_id}_{suffix}_{timestamp}.{ext}".replace("/", "_")
-        filepath = os.path.join("temp", filename)
+        filepath = os.path.join("temp", "logs",filename)
         
         try:
             os.makedirs("temp", exist_ok=True)
+            os.makedirs("temp/logs", exist_ok=True)
             with open(filepath, 'w', encoding='utf-8') as f:
                 if is_json:
                     json.dump(data, f, indent=2, ensure_ascii=False)
@@ -159,7 +160,13 @@ class Neo4jMemoryServer:
 
         # DEBUGGING PURPOSES
         await self._save_to_temp(entry_id, "phase1_output", phase1_result)
-        
+
+        # with open('temp/response_20260324_173959_213465.json', 'r') as f:
+        #     response = json.load(f)
+        #     phase1_result = response['choices'][0]['message']['content']
+
+        #     logger.info(phase1_result)
+
         # Check verdict
         if phase1_result["final_verdict"]["decision"] == "skip_to_postgresql":
             return {
@@ -167,6 +174,42 @@ class Neo4jMemoryServer:
                 "reason": phase1_result["final_verdict"]["reason"],
                 "phase1_analysis": phase1_result
             }
+
+        # Phase 1.5: Context Extraction
+        # Entity Resolve
+        detected_entities = [e["entity"] for e in phase1_result["entity_spotting"]["table"]]
+        existing_identities = await self.neo4j.find_nodes_by_names_or_aliases(detected_entities)
+        
+        # Relationship Context Retrieval
+        relational_depth = phase1_result.get("relational_depth", {})
+        relationships = relational_depth.get("relationships", [])
+        
+        unique_pairs = []
+        for rel in relationships:
+            s, t = rel.get("source"), rel.get("target")
+            if s and t:
+                pair = tuple(sorted([s, t]))
+                if pair not in unique_pairs:
+                    unique_pairs.append(pair)
+
+        past_relationships = []
+        for s_name, t_name in unique_pairs:
+            history = await self.neo4j.get_relationship_context(s_name, t_name)
+            if history:
+                past_relationships.append({
+                    "pair": [s_name, t_name],
+                    "memories": history
+                })
+
+        graph_context = {
+            "identity_map": existing_identities,
+            "past_relationships": past_relationships
+        }
+
+        # For debugging cluster
+        await self._save_to_temp(entry_id, "phase1_5_bridge_context", graph_context)
+
+        logger.info(f"Retrieved context for {len(existing_identities)} pairs")
         
         # Phase 2: Life Graph Architect
         phase2_prompt = self.prompts.get_phase2_prompt(
