@@ -33,40 +33,43 @@ class Neo4jClient:
             logger.info("Disconnected from Neo4j")
     
     async def create_nodes(self, nodes: List[Dict], entry_id: str) -> Dict[str, str]:
-        """Create multiple nodes and return ID mapping"""
+        """Create nodes using MERGE to prevent duplicates and handle existing IDs"""
         id_map = {}
         
         async with self.driver.session() as session:
             for node in nodes:
-                # Generate Neo4j ID
-                neo4j_id = str(uuid.uuid4())
-                id_map[node["id"]] = neo4j_id
+                input_id = node.get("id")
                 
-                # Prepare node properties
-                properties = {
-                    k: v for k, v in node.items() 
-                    if k not in ['id', 'node_type']
-                }
+                is_existing_id = len(input_id) > 10
                 
-                # Add metadata
+                if is_existing_id:
+                    neo4j_id = input_id
+                else:
+                    neo4j_id = str(uuid.uuid4())
+                
+                id_map[input_id] = neo4j_id
+                
+                properties = {k: v for k, v in node.items() if k not in ['id', 'node_type']}
                 properties['source_entry_id'] = entry_id
-                properties['created_at'] = datetime.now().isoformat()
+                properties['updated_at'] = datetime.now().isoformat()
+
+                # MERGE, NOT CREATE
+                query = f"""
+                MERGE (n:{node['node_type']} {{ id: $id }})
+                ON CREATE SET n += $props, n.created_at = $now
+                ON MATCH SET n += $props
+                RETURN n
+                """
                 
-                # Create node with explicit ID
                 await session.run(
-                    f"""
-                    CREATE (n:{node['node_type']} {{
-                        id: $id,
-                        {', '.join([f'{k}: ${k}' for k in properties.keys()])}
-                    }})
-                    RETURN n
-                    """,
+                    query,
                     id=neo4j_id,
-                    **properties
+                    props=properties,
+                    now=datetime.now().isoformat()
                 )
                 
-                logger.debug(f"Created node: {node['node_type']} - {neo4j_id}")
-        
+                logger.debug(f"Merged node: {node['node_type']} - {neo4j_id}")
+                
         return id_map
     
     async def create_relationships(self, relationships: List[Dict], id_map: Dict[str, str], entry_id: str):
@@ -100,6 +103,30 @@ class Neo4jClient:
                 )
                 
                 logger.debug(f"Created relationship: {rel['type']}")
+
+    async def get_relationship_context(self, name1: str, name2: str, limit: int = 5):
+        query = """
+        MATCH (n)-[r]-(m)
+        WHERE (n.name = $name1 AND m.name = $name2) 
+        OR (n.name = $name2 AND m.name = $name1)
+        RETURN n.name as source, type(r) as type, m.name as target, r.description as desc
+        ORDER BY r.created_at DESC
+        LIMIT $limit
+        """
+        params = {"name1": name1, "name2": name2, "limit": limit}
+        return await self.query(query, params)
+    
+    async def find_nodes_by_names_or_aliases(self, names: List[str]):
+        query = """
+        MATCH (n)
+        WHERE n.name IN $names 
+        OR any(alias IN n.aliases WHERE alias IN $names)
+        RETURN n.id AS id, 
+            n.name AS db_name, 
+            [l IN labels(n) WHERE l <> 'Entity'][0] AS type,
+            n.aliases AS aliases
+        """
+        return await self.query(query, {"names": names})
     
     async def find_existing_person(self, name: str) -> Optional[Dict]:
         """Find existing person by canonical name"""
