@@ -13,6 +13,13 @@ Brief technical documentation of the Narrative-to-Graph architecture for the Kao
 
 ---
 
+## Brief
+There are at least four major segments:
+- Emotional dumping (quick venting)
+- Life logging (daily notes)
+- Productivity/tracking
+- Deep reflection/self-growth
+
 ## Table of Contents
 
 1. [⚙️ How to Run](#️-how-to-run)  
