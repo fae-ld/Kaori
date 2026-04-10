@@ -160,132 +160,18 @@ class Neo4jMemoryServer:
 
         # DEBUGGING PURPOSES
         await self._save_to_temp(entry_id, "phase1_output", phase1_result)
-
-        # with open('temp/response_20260324_173959_213465.json', 'r') as f:
-        #     response = json.load(f)
-        #     phase1_result = response['choices'][0]['message']['content']
-
-        #     logger.info(phase1_result)
-
-        # Check verdict
-        if phase1_result["final_verdict"]["decision"] == "skip_to_postgresql":
-            return {
-                "graph_update": False,
-                "reason": phase1_result["final_verdict"]["reason"],
-                "phase1_analysis": phase1_result
-            }
-
-        # Phase 1.5: Context Extraction
-        # Entity Resolve
-        detected_entities = [e["entity"] for e in phase1_result["entity_spotting"]["table"]]
-        existing_identities = await self.neo4j.find_nodes_by_names_or_aliases(detected_entities)
-        
-        # Relationship Context Retrieval
-        relational_depth = phase1_result.get("relational_depth", {})
-        relationships = relational_depth.get("relationships", [])
-        
-        unique_pairs = []
-        for rel in relationships:
-            s, t = rel.get("source"), rel.get("target")
-            if s and t:
-                pair = tuple(sorted([s, t]))
-                if pair not in unique_pairs:
-                    unique_pairs.append(pair)
-
-        past_relationships = []
-        for s_name, t_name in unique_pairs:
-            history = await self.neo4j.get_relationship_context(s_name, t_name)
-            if history:
-                past_relationships.append({
-                    "pair": [s_name, t_name],
-                    "memories": history
-                })
-
-        graph_context = {
-            "identity_map": existing_identities,
-            "past_relationships": past_relationships
-        }
-
-        # For debugging cluster
-        await self._save_to_temp(entry_id, "phase1_5_bridge_context", graph_context)
-
-        logger.info(f"Retrieved context for {len(existing_identities)} pairs")
-        
-        # Phase 2: Life Graph Architect
-        phase2_prompt = self.prompts.get_phase2_prompt(
-            phase1_result, entry_id, user_name
-        )
-
-        # DEBUGGING PURPOSES
-        await self._save_to_temp(entry_id, "phase2_input", phase2_prompt, is_json=False)
-
-        phase2_result = await self.openrouter.chat_completion(
-            phase2_prompt,
-            temperature=0.2
-        )
-
-        # DEBUGGING PURPOSES
-        await self._save_to_temp(entry_id, "phase2_output", phase2_result)
-        
-        if not phase2_result.get("graph_update", False):
-            return phase2_result
-        
-        entity_map = {node["id"]: node["name"] for node in phase2_result.get("nodes", [])}
-
-        if "relationships" in phase2_result:
-            for rel in tqdm(phase2_result["relationships"], desc="Vectorizing relationships"):
-                from_node_name = entity_map.get(rel["from"])
-                to_node_name = entity_map.get(rel["to"])
-
-                desc_phase1 = next(
-                    (r["description"] for r in phase1_result.get("relationships", []) 
-                    if r["source"] == from_node_name and r["target"] == to_node_name),
-                    ""
-                )
-                
-                desc_phase2 = rel["properties"].get("description", "")
-
-                text_to_embed = f"Relationship from {from_node_name} to {to_node_name}: {desc_phase1}. {desc_phase2}"
-                rel["properties"]["embedding"] = self.vectorizer.encode(text_to_embed)
-
-        logger.info("Vectorizing done, now attempt to save it")
-
-        # DEBUGGING PURPOSES
-        await self._save_to_temp(entry_id, "phase2_output_vectorized", phase2_result)
-
-        logger.info("Vectorized saved, now processing to neo")
-
-        # Apply to Neo4j
-        neo4j_result = await self._apply_to_neo4j(phase2_result, entry_id)
-        
-        return {
-            "entry_id": entry_id,
-            "processed": True,
-            "phase1_analysis": phase1_result,
-            "phase2_graph": phase2_result,
-            "neo4j_update": neo4j_result
-        }
     
     async def _apply_to_neo4j(self, graph_update: Dict, entry_id: str) -> Dict:
-        """Apply graph updates to Neo4j"""
+        """Apply graph updates to Neo4j using the new sync logic"""
         try:
-            # Create nodes
-            id_map = await self.neo4j.create_nodes(
-                graph_update.get("nodes", []),
-                entry_id
-            )
-            
-            # Create relationships
-            await self.neo4j.create_relationships(
-                graph_update.get("relationships", []),
-                id_map,
-                entry_id
-            )
+            # Panggil logic baru yang sudah handle embedding & semantic merge
+            id_map = await self.neo4j.sync_graph_data(graph_update, entry_id)
             
             return {
                 "applied": True,
                 "node_count": len(graph_update.get("nodes", [])),
-                "relationship_count": len(graph_update.get("relationships", []))
+                "relationship_count": len(graph_update.get("edges", [])), # Ubah 'relationships' jadi 'edges' sesuai JSON
+                "mapped_ids": len(id_map)
             }
             
         except Exception as e:

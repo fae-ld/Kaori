@@ -22,7 +22,7 @@ class PromptManager:
     
     def get_phase1_prompt(self, user_name: str, user_aliases: list, entry_text: str) -> str:
         """Get formatted phase 1 prompt"""
-        template = self._load_prompt("phase1_detective.txt")
+        template = self._load_prompt("new_prompt.txt")
         t = Template(template)
         
         return t.safe_substitute(
@@ -56,15 +56,14 @@ def get_prompt_manager() -> PromptManager:
 
 if __name__ == "__main__":
     # For testing purposes
-    with open("temp/entry.txt", "r") as f:
+    with open("temp/entries/003_entry_karen.txt", "r") as f:
         entry_text = f.read()
 
     pm = get_prompt_manager()
-    phase1 = pm.get_phase1_prompt("Alice", ["A", "Ally"], entry_text)
+    phase1 = pm.get_phase1_prompt("Karen Miura", ["Karen", "Ren"], entry_text)
 
-    print("Phase 1 Prompt:")
     print(phase1)
     
-    phase2 = pm.get_phase2_prompt({"final_verdict": {"decision": "skip_to_postgresql"}}, "entry123", "Alice")
-    print("\nPhase 2 Prompt:")
-    print(phase2)
+    # phase2 = pm.get_phase2_prompt({"final_verdict": {"decision": "skip_to_postgresql"}}, "entry123", "Alice")
+    # print("\nPhase 2 Prompt:")
+    # print(phase2)
