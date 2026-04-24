@@ -5,18 +5,21 @@ from neomodel import (
     StringProperty,
     DateTimeProperty,
     FloatProperty,
-    JSONProperty,
-    RelationshipTo
+    ArrayProperty,
+    RelationshipTo,
+    db
 )
+
+generate_uuid = lambda: uuid.uuid4().hex
 
 class EmotionType(StructuredNode):
     """Categorical emotion (e.g., 'fear', 'joy')"""
-    uid = StringProperty(unique_index=True, required=True)
+    uid = StringProperty(unique_index=True, default=generate_uuid)
     name = StringProperty(required=True)
 
 class EmotionState(StructuredNode):
     """Instance of an emotion felt at a specific time"""
-    uid = StringProperty(unique_index=True, default=lambda: uuid.uuid4().hex)
+    uid = StringProperty(unique_index=True, default=generate_uuid)
     description = StringProperty()
     intensity = FloatProperty()
     valence = FloatProperty()
@@ -28,13 +31,35 @@ class EmotionState(StructuredNode):
 
 class Person(StructuredNode):
     """Individual entity mentioned in entries"""
-    uid = StringProperty(unique_index=True, default=lambda: uuid.uuid4().hex)
+    uid = StringProperty(unique_index=True, default=generate_uuid)
     name = StringProperty(required=True)
-    aliases = JSONProperty() # Array of strings
+    aliases = ArrayProperty(StringProperty(), default=[]) 
+
+    @classmethod
+    def find_or_create(cls, extracted_name, extracted_aliases):
+        all_potential_names = list(set([extracted_name] + extracted_aliases))
+        
+        query = """
+        MATCH (p:Person)
+        WHERE p.name IN $names OR any(alias IN p.aliases WHERE alias IN $names)
+        RETURN p
+        LIMIT 1
+        """
+        results, _ = db.cypher_query(query, {'names': all_potential_names})
+
+        if results:
+            existing_node = Person.inflate(results[0][0])
+            updated_aliases = list(set(existing_node.aliases + all_potential_names))
+            existing_node.aliases = updated_aliases
+            existing_node.save()
+            return existing_node
+        else:
+            new_node = cls(name=extracted_name, aliases=all_potential_names).save()
+            return new_node
 
 class Event(StructuredNode):
     """Specific occurrence or activity"""
-    uid = StringProperty(unique_index=True, default=lambda: uuid.uuid4().hex)
+    uid = StringProperty(unique_index=True, default=generate_uuid)
     label = StringProperty(required=True)
     description = StringProperty()
     timestamp = DateTimeProperty()
@@ -49,8 +74,7 @@ class Event(StructuredNode):
 
 class Entry(StructuredNode):
     """Daily journal record; UID synced from PostgreSQL"""
-    uid = StringProperty(unique_index=True, required=True)
-    raw_text = StringProperty(required=True)
+    uid = StringProperty(unique_index=True, default=generate_uuid)
     summary = StringProperty()
     created_at = DateTimeProperty()
     
