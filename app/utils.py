@@ -11,7 +11,17 @@ from app.exceptions.llm_exceptions import LLMSchemaValidationError
 from neomodel import db
 from app.models.graph_models import Person, EmotionType, EmotionState, Event, Entry
 
-def load_prompt(filename: str = 'extraction.txt', **kwargs) -> str:
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer('all-MiniLM-L6-v2')
+
+def get_embedding(text: str):
+    if not text:
+        return None
+    embedding = model.encode(text)
+    return embedding.tolist()
+
+def load_prompt(filename, **kwargs) -> str:
     """Loads a text file and substitutes placeholders using $ syntax."""
     try:
         base_dir = os.path.dirname(__file__)
@@ -94,6 +104,7 @@ def process_and_persist_graph(raw_content):
                     extracted_name=props.get('name'),
                     extracted_aliases=props.get('aliases', [])
                 )
+    
             elif node_type == 'EmotionType':
                 name_val = props.get('name').lower()
                 node = EmotionType.nodes.get_or_none(name=name_val)
@@ -101,19 +112,23 @@ def process_and_persist_graph(raw_content):
                     node = EmotionType(name=name_val).save()
             elif node_type == 'Entry':
                 node = Entry(
-                    summary=props.get('summary')
+                    summary=props.get('summary'),
+                    embedding=get_embedding(props.get('summary'))
                 ).save()
             elif node_type == 'Event':
+                combined_text = f"{node_data.get('label')}: {props.get('description')}"
                 node = Event(
                     label=node_data.get('label'), # Use label as event title
                     description=props.get('description'),
-                    confidence=props.get('confidence', 1.0)
+                    confidence=props.get('confidence', 1.0),
+                    embedding=get_embedding(combined_text)
                 ).save()
             elif node_type == 'EmotionState':
                 node = EmotionState(
                     description=props.get('description'),
                     intensity=props.get('intensity'),
-                    valence=props.get('valence')
+                    valence=props.get('valence'),
+                    embedding=get_embedding(props.get('description'))
                 ).save()
             
             created_nodes[llm_id] = node
@@ -140,9 +155,9 @@ def process_and_persist_graph(raw_content):
 
     return True
 
-def process_and_log(llm, data_input, variables):
+def process_and_log(llm, data_input, filename, variables):
     """Handles LLM execution and saves logs to temp folder."""
-    rendered_prompt = load_prompt(filename='extraction.txt', **variables)
+    rendered_prompt = load_prompt(filename, **variables)
     
     response = llm.invoke([HumanMessage(content=rendered_prompt)])
     raw_content = response.content
@@ -178,3 +193,15 @@ def process_and_log(llm, data_input, variables):
         pass
 
     return raw_content
+
+def parse_json_from_llm(content: str):
+    """Utility to clean and parse JSON from LLM content."""
+    try:
+        clean = content.strip()
+        if "```json" in clean:
+            clean = clean.split("```json")[1].split("```")[0]
+        elif "```" in clean:
+            clean = clean.split("```")[1].split("```")[0]
+        return json.loads(clean.strip())
+    except:
+        return {"needs_tools": False, "current_vibe": "Sedang bercerita"}

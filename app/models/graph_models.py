@@ -25,6 +25,7 @@ class EmotionState(StructuredNode):
     valence = FloatProperty()
     timestamp = DateTimeProperty()
     confidence = FloatProperty()
+    embedding = ArrayProperty(FloatProperty())
     
     # (:EmotionState)-[:INSTANCE_OF]->(:EmotionType)
     emotion_type = RelationshipTo('EmotionType', 'INSTANCE_OF')
@@ -33,7 +34,7 @@ class Person(StructuredNode):
     """Individual entity mentioned in entries"""
     uid = StringProperty(unique_index=True, default=generate_uuid)
     name = StringProperty(required=True)
-    aliases = ArrayProperty(StringProperty(), default=[]) 
+    aliases = ArrayProperty(StringProperty(), default=[])
 
     @classmethod
     def find_or_create(cls, extracted_name, extracted_aliases):
@@ -64,12 +65,13 @@ class Event(StructuredNode):
     description = StringProperty()
     timestamp = DateTimeProperty()
     confidence = FloatProperty()
+    embedding = ArrayProperty(FloatProperty())
     
     # (:Event)-[:INVOLVES]->(:Person)
     people = RelationshipTo('Person', 'INVOLVES')
     # (:Event)-[:TRIGGERS]->(:EmotionState)
     emotions = RelationshipTo('EmotionState', 'TRIGGERS')
-    # (:Event)-[:LEADS_TO]->(:Event)
+    # TODO: (:Event)-[:LEADS_TO]->(:Event)
     next_events = RelationshipTo('Event', 'LEADS_TO')
 
 class Entry(StructuredNode):
@@ -77,6 +79,7 @@ class Entry(StructuredNode):
     uid = StringProperty(unique_index=True, default=generate_uuid)
     summary = StringProperty()
     created_at = DateTimeProperty()
+    embedding = ArrayProperty(FloatProperty())
     
     # (:Entry)-[:CONTAINS]->(:Event)
     events = RelationshipTo('Event', 'CONTAINS')

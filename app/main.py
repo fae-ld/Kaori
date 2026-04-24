@@ -2,16 +2,22 @@
 from neomodel import config
 
 import os
+import json
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from app.schemas import JournalRequest
 from app.models.graph_models import Person, Entry
+from app.utils import process_and_log, process_and_persist_graph, parse_json_from_llm, load_prompt
+from app.tools import *
+from app.exceptions.llm_exceptions import LLMSchemaValidationError
+
 from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
+
 from neomodel import db
 
-from app.utils import process_and_log, process_and_persist_graph
-from app.exceptions.llm_exceptions import LLMSchemaValidationError
 
 load_dotenv()
 
@@ -102,20 +108,24 @@ async def get_entry_graph_tree(entry_uid: str):
 @app.post('/extract')
 async def extract_endpoint(data: JournalRequest):
     try:
-        result = process_and_log(
-            llm=llm,
-            data_input=data.model_dump(),
-            variables={
-                "username": data.username,
-                "aliases": ", ".join(data.aliases),
-                "entry_text": data.entry_text
-            }
-        )
+        # result = process_and_log(
+        #     llm=llm,
+        #     data_input=data.model_dump(),
+        #     filename='extraction.txt',
+        #     variables={
+        #         "username": data.username,
+        #         "aliases": ", ".join(data.aliases),
+        #         "entry_text": data.entry_text
+        #     }
+        # )
 
-        # with open('temp/outputs/006.json', 'r') as response:
-        #     result = json.load(response)
+        for i in range(2, 7):
+            print(f'start {i}')
+            with open(f'temp/outputs/00{i}.json', 'r') as response:
+                result = json.load(response)
 
-        process_and_persist_graph(result)
+            process_and_persist_graph(result)
+            print(f'done {i}')
         
         return {"status": "success", "message": "Graph data persisted successfully"}
 
@@ -123,3 +133,54 @@ async def extract_endpoint(data: JournalRequest):
         raise HTTPException(status_code=422, detail={"errors": e.errors})
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
+    
+@app.post("/api/chat")
+async def chat_endpoint(request: Request):
+    data = await request.json()
+    user_input = data.get("message")
+    username = data.get("username")
+
+    # Step 1: LLM planning and tool decision
+    plan_variables = {"username": username, "user_input": user_input}
+    raw_plan = process_and_log(llm, data, 'retrieval_1.txt', plan_variables)
+    plan_json = parse_json_from_llm(raw_plan)
+    
+    # Step 2: Knowledge Graph retrieval
+    graph_context = ""
+    if plan_json.get("needs_tools"):
+        context_parts = []
+        for req in plan_json.get("requested_tools", []):
+            tool = req.get('tool')
+            query = req.get('search_query')
+            
+            if tool == 'get_event_patterns':
+                res = get_event_patterns(query)
+                context_parts.append(f"Events: {res}")
+            elif tool == 'get_person_dynamics':
+                res = get_person_dynamics(query)
+                context_parts.append(f"People: {res}")
+            elif tool == 'get_emotional_history':
+                res = get_emotional_history(query)
+                context_parts.append(f"Emotions: {res}")
+            elif tool == 'check_sensitivity':
+                res = check_sensitivity(query)
+                context_parts.append(f"Sensitivity: {res}")
+        
+        graph_context = "\n".join(context_parts)
+
+    # Step 3: Final streaming response
+    final_variables = {
+        "username": username,
+        "user_input": user_input,
+        "current_vibe": plan_json.get("current_vibe", "Emotional"),
+        "graph_context": graph_context or "No memories.",
+        "recent_history": ""
+    }
+
+    prompt = load_prompt(filename='retrieval_2.txt', **final_variables)
+
+    async def generate_response():
+        async for chunk in llm.astream([HumanMessage(content=prompt)]):
+            yield chunk.content
+
+    return StreamingResponse(generate_response(), media_type="text/plain")
