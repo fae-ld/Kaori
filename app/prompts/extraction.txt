@@ -25,7 +25,7 @@ NOTE: All node attributes must be written in English even though the entry could
 
 Entry: Represents the full journal record.
 
-Required fields: id, summary, created_at
+Required fields: id, label, summary, created_at
 
 Event: Explicit real-world occurrences or situations.
 
@@ -81,10 +81,12 @@ Implicit Subject: If the user is describing their own actions/feelings, always l
 
 📥 INPUT
 
+Journal Entry ID: $entry_id;
+Journal Entry Label: $entry_id;
 Journal Entry:
 ```txt
 $entry_text
-```
+```;
 
 📤 OUTPUT FORMAT
 
