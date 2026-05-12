@@ -1,0 +1,7 @@
+.git
+.venv
+neo4j/
+temp/
+__pycache__/
+*.pyc
+.env

@@ -13,3 +13,17 @@ services:
     volumes:
       - ./neo4j/data:/data
       - ./neo4j/plugins:/plugins
+  kaori-app:
+    image: kaori:latest
+    container_name: kaori-app
+    ports:
+      - "8001:8001"
+    environment:
+      - NEO4J_URI=bolt://neo4j-kaori:7687
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL}
+    volumes:
+      - ./app:/app/app  # <--- Ini kuncinya!
+    env_file:
+      - .env
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
