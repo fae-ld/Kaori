@@ -59,7 +59,7 @@ def validate_schema(data):
             errors.append(f"Node {node_id} has an invalid node_type: {n_type}")
         
         if not node.get('label'):
-            errors.append(f"Node {node_id} doesn't have field 'label'")
+            errors.append(f"Node {node_id} of type {n_type} doesn't have field 'label'")
             
         node_map[node_id] = n_type
 
@@ -95,7 +95,7 @@ def process_and_persist_graph(raw_content):
 
         for node_data in raw_content['nodes']:
             node_type = node_data['node_type']
-            llm_id = node_data['id']
+            reference_id = node_data['id'] # WARNING: Expects postgre's generated ID (referentially)
             props = node_data['properties']
 
             # Class mapping according to node_type
@@ -112,6 +112,7 @@ def process_and_persist_graph(raw_content):
                     node = EmotionType(name=name_val).save()
             elif node_type == 'Entry':
                 node = Entry(
+                    label=reference_id,
                     summary=props.get('summary'),
                     embedding=get_embedding(props.get('summary'))
                 ).save()
@@ -131,7 +132,7 @@ def process_and_persist_graph(raw_content):
                     embedding=get_embedding(props.get('description'))
                 ).save()
             
-            created_nodes[llm_id] = node
+            created_nodes[reference_id] = node
 
         # --- Relationship Linking ---
         for edge in raw_content['edges']:
@@ -169,13 +170,13 @@ def process_and_log(llm, data_input, filename, variables):
     temp_dir = os.path.join("temp", session_id)
     os.makedirs(temp_dir, exist_ok=True)
 
-    with open(os.path.join(temp_dir, "input.json"), "w") as f:
+    with open(os.path.join(temp_dir, "source_context.json"), "w") as f:
         json.dump(data_input, f, indent=4)
     
-    with open(os.path.join(temp_dir, "rendered_prompt.txt"), "w") as f:
+    with open(os.path.join(temp_dir, "final_prompt.txt"), "w") as f:
         f.write(rendered_prompt)
     
-    with open(os.path.join(temp_dir, "output.json"), "w") as f:
+    with open(os.path.join(temp_dir, "llm_raw_response.json"), "w") as f:
         json.dump({"raw_output": raw_content}, f, indent=4)
 
     try:
@@ -187,12 +188,12 @@ def process_and_log(llm, data_input, filename, variables):
 
         parsed_json = json.loads(clean_content)
         
-        with open(os.path.join(temp_dir, "output_data.json"), "w") as f:
+        with open(os.path.join(temp_dir, "llm_processed_response.json"), "w") as f:
             json.dump(parsed_json, f, indent=4)
     except (json.JSONDecodeError, Exception):
         pass
 
-    return raw_content
+    return parsed_json
 
 def parse_json_from_llm(content: str):
     """Utility to clean and parse JSON from LLM content."""
