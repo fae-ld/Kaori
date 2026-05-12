@@ -65,15 +65,17 @@ async def test_graph(name: str, entry_text: str):
     
     return {"status": "success", "detail": f"Entry linked to {name}"}
 
-@app.get("/graph/tree/{entry_uid}")
-async def get_entry_graph_tree(entry_uid: str):
+@app.get("/graph/tree/{input_id}")
+async def get_entry_graph_tree(input_id: str):
     query = """
-    MATCH (e:Entry {uid: $uid})-[:CONTAINS]->(ev:Event)
+    MATCH (e:Entry)
+    WHERE e.uid = $identifier OR e.label = $identifier
+    MATCH (e)-[:CONTAINS]->(ev:Event)
     OPTIONAL MATCH (ev)-[:INVOLVES]->(p:Person)
     OPTIONAL MATCH (ev)-[:TRIGGERS]->(es:EmotionState)-[:INSTANCE_OF]->(et:EmotionType)
     RETURN e, ev, p, es, et
     """
-    results, _ = db.cypher_query(query, {"uid": entry_uid})
+    results, _ = db.cypher_query(query, {"identifier": input_id})
     
     if not results:
         raise HTTPException(status_code=404, detail="Entry not found or has no events")
