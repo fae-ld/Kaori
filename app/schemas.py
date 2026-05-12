@@ -5,6 +5,7 @@ from typing import List, Any, Dict
 class JournalRequest(BaseModel):
     username: str
     aliases: List[str]
+    entry_id: str
     entry_text: str
 
 class ExtractionResponse(BaseModel):
