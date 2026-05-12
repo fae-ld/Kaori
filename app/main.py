@@ -13,7 +13,7 @@ from app.utils import process_and_log, process_and_persist_graph, parse_json_fro
 from app.tools import *
 from app.exceptions.llm_exceptions import LLMSchemaValidationError
 
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 
 from neomodel import db
@@ -23,11 +23,14 @@ load_dotenv()
 
 app = FastAPI()
 
-llm = ChatOpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY"),
-    model=os.getenv("OPENROUTER_MODEL")
-)
+try:
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
+        google_api_key=os.getenv("GOOGLE_API_KEY"),
+        temperature=0.1
+    )
+except Exception as e:
+    print(f"Error initializing Gemini: {e}")
 
 load_dotenv()
 
@@ -38,6 +41,20 @@ app = FastAPI(title="Kaori")
 @app.get("/")
 async def hello_world():
     return {"message": "Kaori Service is Online"}
+
+@app.get("/hello")
+async def hello_gemini():
+    try:
+        prompt = "Katakan 'Gemini is ready!' dengan sangat singkat."
+        response = llm.invoke(prompt)
+        
+        return {
+            "status": "online",
+            "model": "gemini-1.5-flash",
+            "message": response.content.strip()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gemini Error: {str(e)}")
 
 @app.post("/test-graph")
 async def test_graph(name: str, entry_text: str):
@@ -105,27 +122,22 @@ async def get_entry_graph_tree(entry_uid: str):
 
     return tree
 
-@app.post('/extract')
+@app.post('/api/extract')
 async def extract_endpoint(data: JournalRequest):
     try:
-        # result = process_and_log(
-        #     llm=llm,
-        #     data_input=data.model_dump(),
-        #     filename='extraction.txt',
-        #     variables={
-        #         "username": data.username,
-        #         "aliases": ", ".join(data.aliases),
-        #         "entry_text": data.entry_text
-        #     }
-        # )
-
-        for i in range(2, 7):
-            print(f'start {i}')
-            with open(f'temp/outputs/00{i}.json', 'r') as response:
-                result = json.load(response)
-
-            process_and_persist_graph(result)
-            print(f'done {i}')
+        result = process_and_log(
+            llm=llm,
+            data_input=data.model_dump(),
+            filename='extraction.txt',
+            variables={
+                "username": data.username,
+                "aliases": ", ".join(data.aliases),
+                "entry_id": data.entry_id,
+                "entry_text": data.entry_text
+            }
+        )
+        
+        process_and_persist_graph(result)
         
         return {"status": "success", "message": "Graph data persisted successfully"}
 
