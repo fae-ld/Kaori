@@ -75,8 +75,9 @@ class Event(StructuredNode):
     next_events = RelationshipTo('Event', 'LEADS_TO')
 
 class Entry(StructuredNode):
-    """Daily journal record; UID synced from PostgreSQL"""
+    """Daily journal record; Neo4J-generated id, and using Postgres-generated id as label"""
     uid = StringProperty(unique_index=True, default=generate_uuid)
+    label = StringProperty(required=True) # Reference id from Postgres
     summary = StringProperty()
     created_at = DateTimeProperty()
     embedding = ArrayProperty(FloatProperty())
