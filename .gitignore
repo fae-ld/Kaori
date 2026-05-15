@@ -18,3 +18,5 @@ neo4j/
 temp/
 
 .todo
+
+backups/

@@ -11,3 +11,17 @@ class JournalRequest(BaseModel):
 class ExtractionResponse(BaseModel):
     status: str
     data: Dict[str, Any]
+
+class ChatRequest(BaseModel):
+    user_name: str
+    message: str
+    history: List[Dict[str, str]]
+
+class MessageItem(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    user_name: str
+    history: List[MessageItem]
+    # TODO: Optional field session_id or etc

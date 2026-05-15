@@ -11,6 +11,8 @@ ENV UV_PYTHON_PREFERENCE=only-system
 
 WORKDIR /app
 
+RUN mkdir -p /app/backups && chmod -R 777 /app/backups
+
 # 3. Copy config
 COPY pyproject.toml uv.lock ./
 

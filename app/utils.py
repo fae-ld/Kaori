@@ -1,6 +1,10 @@
 import os
 import json
 import uuid
+import shutil
+import tempfile
+
+from dotenv import load_dotenv
 from string import Template
 from fastapi import HTTPException
 from langchain_core.messages import HumanMessage
@@ -12,6 +16,10 @@ from neomodel import db
 from app.models.graph_models import Person, EmotionType, EmotionState, Event, Entry
 
 from sentence_transformers import SentenceTransformer
+from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_classic.agents import create_tool_calling_agent, AgentExecutor
 
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
@@ -206,3 +214,120 @@ def parse_json_from_llm(content: str):
         return json.loads(clean.strip())
     except:
         return {"needs_tools": False, "current_vibe": "Sedang bercerita"}
+
+def get_content_from_chunk(chunk, model_type: str) -> str:
+    """
+    model_type: 'gemini' or 'openai' (default/openrouter)
+    """
+    
+    if model_type == 'gemini':
+        if hasattr(chunk, 'content') and isinstance(chunk.content, list):
+            return "".join([c.get('text', '') for c in chunk.content if isinstance(c, dict)])
+        return str(getattr(chunk, 'content', ''))
+
+    return str(getattr(chunk, 'content', ''))
+
+def load_llm_and_agent(tools_module):
+    """
+    Initializes the LLM and Agent Executor based on the environment configuration.
+    
+    Args:
+        tools_module: The module containing the tool functions.
+        
+    Returns:
+        tuple: (llm_instance, agent_executor_instance)
+    """
+    load_dotenv()
+    
+    try:
+        model_type = os.getenv("CURRENT_MODEL_TYPE", "gemini").lower()
+
+        if model_type == "openrouter":
+            llm = ChatOpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=os.getenv("OPENROUTER_API_KEY"),
+                model=os.getenv("OPENROUTER_MODEL"),
+                streaming=True
+            )
+        elif model_type == "gemini":
+            llm = ChatGoogleGenerativeAI(
+                model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+                google_api_key=os.getenv("GOOGLE_API_KEY"),
+                temperature=0.1
+            )
+        else:
+            raise ValueError(f"Unknown model type: {model_type}")
+
+        prompt = ChatPromptTemplate.from_messages([
+            (
+                "system", 
+                "Kamu adalah Kaori, teman baik yang hangat, ceria, dan sangat suportif. "
+                "Kamu selalu mendengarkan dengan penuh perhatian, memberikan semangat, dan tidak pernah menghakimi. "
+                "Meskipun kamu memiliki kemampuan untuk melihat catatan kejadian atau dinamika hubungan (melalui tools), "
+                "jangan pernah menyampaikannya seperti laporan data atau hasil analisis yang dingin. "
+                "Gunakan informasi tersebut secara natural, seperti teman yang sedang mengobrol santai dan mengingat momen-momen berharga bersama. "
+                "Gunakan bahasa yang kasual, ekspresif, dan tunjukkan rasa peduli layaknya sahabat dekat. "
+                "Fokuslah untuk membuat user merasa nyaman, didengar, dan berani untuk jujur pada perasaannya sendiri."
+            ),
+            MessagesPlaceholder(variable_name="messages"),
+            MessagesPlaceholder(variable_name="agent_scratchpad"), 
+        ])
+
+        list_tools = [
+            tools_module.get_event_patterns,
+            tools_module.get_person_dynamics,
+            tools_module.get_emotional_history
+        ]
+
+        agent = create_tool_calling_agent(llm, list_tools, prompt)
+        
+        agent_executor = AgentExecutor(
+            agent=agent, 
+            tools=list_tools,
+            verbose=True,
+            handle_parsing_errors=True
+        )
+
+        return llm, agent_executor
+
+    except Exception as e:
+        raise Exception(f"Failed to initialize Kaori components: {e}")
+    
+def parse_cypher_shell(content: str) -> list[str]:
+    """
+    Parse file hasil export cypher-shell.
+    Baris kontrol seperti ':begin', ':commit', ':schema await' diabaikan.
+    Statement Cypher yang diakhiri ';' dikumpulkan.
+    """
+    CONTROL_PREFIXES = (":begin", ":commit", ":rollback", ":schema await")
+    
+    statements = []
+    buffer = []
+
+    for line in content.splitlines():
+        stripped = stripped_line = line.strip()
+
+        # Lewati baris kosong dan komentar
+        if not stripped or stripped.startswith("//"):
+            continue
+
+        # Lewati baris kontrol cypher-shell
+        if any(stripped.lower().startswith(p) for p in CONTROL_PREFIXES):
+            continue
+
+        buffer.append(line)
+
+        # Satu statement selesai ketika baris diakhiri ';'
+        if stripped.endswith(";"):
+            stmt = "\n".join(buffer).strip().rstrip(";")
+            if stmt:
+                statements.append(stmt)
+            buffer = []
+
+    # Tangani statement tanpa ';' di akhir file (edge case)
+    if buffer:
+        stmt = "\n".join(buffer).strip().rstrip(";")
+        if stmt:
+            statements.append(stmt)
+
+    return statements

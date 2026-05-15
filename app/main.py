@@ -3,54 +3,59 @@ from neomodel import config
 
 import os
 import json
+import logging
+import shutil
+import tempfile
+
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, FileResponse
 
-from app.schemas import JournalRequest
+from app.schemas import JournalRequest, ChatRequest
 from app.models.graph_models import Person, Entry
-from app.utils import process_and_log, process_and_persist_graph, parse_json_from_llm, load_prompt
-from app.tools import *
+from app.utils import process_and_log, process_and_persist_graph, get_content_from_chunk, load_llm_and_agent, parse_cypher_shell
 from app.exceptions.llm_exceptions import LLMSchemaValidationError
+import app.tools as tools
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 
 from neomodel import db
-
 
 load_dotenv()
 
 app = FastAPI()
 
-try:
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        google_api_key=os.getenv("GOOGLE_API_KEY"),
-        temperature=0.1
-    )
-except Exception as e:
-    print(f"Error initializing Gemini: {e}")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+)
 
-load_dotenv()
+BACKUP_DIR = os.getenv("NEO4J_BACKUP_DIR")
+MODEL_TYPE = os.getenv("MODEL_TYPE")
+MODEL_NAME = os.getenv("OPENROUTER_MODEL") if MODEL_TYPE == "openrouter" else os.getenv("GEMINI_MODEL")
+
+llm, agent_executor = load_llm_and_agent(tools)
 
 config.DATABASE_URL = f"bolt://{os.getenv('NEO4J_USER')}:{os.getenv('NEO4J_PASSWORD')}@{os.getenv('NEO4J_URI').split('//')[1]}"
-
-app = FastAPI(title="Kaori")
 
 @app.get("/")
 async def hello_world():
     return {"message": "Kaori Service is Online"}
 
 @app.get("/hello")
-async def hello_gemini():
+async def say_hello():
     try:
-        prompt = "Katakan 'Gemini is ready!' dengan sangat singkat."
+        prompt = "Katakan 'Kaori is ready!' dengan sangat singkat."
         response = llm.invoke(prompt)
         
         return {
             "status": "online",
-            "model": "gemini-1.5-flash",
+            "provider": MODEL_TYPE,
+            "model": MODEL_NAME,
             "message": response.content.strip()
         }
     except Exception as e:
@@ -65,7 +70,7 @@ async def test_graph(name: str, entry_text: str):
     
     return {"status": "success", "detail": f"Entry linked to {name}"}
 
-@app.get("/graph/tree/{input_id}")
+@app.get("/api/graph/tree/{input_id}")
 async def get_entry_graph_tree(input_id: str):
     query = """
     MATCH (e:Entry)
@@ -124,6 +129,87 @@ async def get_entry_graph_tree(input_id: str):
 
     return tree
 
+@app.get("/api/graph/backup")
+async def export_graph():
+    """
+    Export database ke file .cypher dan kirim sebagai download
+    """
+    file_name = "memora_backup.cypher"
+    file_path = os.path.join(BACKUP_DIR, file_name)
+    
+    try:
+        query = f"""    
+        CALL apoc.export.cypher.all('{file_name}', {{
+            format: 'cypher-shell',
+            useOptimizations: {{type: 'UNWIND_BATCH', unwindBatchSize: 20}},
+            ifNotExists: true
+        }})
+        """
+        db.cypher_query(query)
+        
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=500, detail="Backup file was not created by Neo4j")
+            
+        return FileResponse(
+            path=file_path,
+            filename=file_name,
+            media_type='text/plain'
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+@app.post("/api/graph/restore")
+async def import_graph(file: UploadFile = File(...)):
+    """
+    Import/restore database dari file .cypher hasil export cypher-shell
+    """
+    if not file.filename.endswith(".cypher"):
+        raise HTTPException(status_code=400, detail="File harus berekstensi .cypher")
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".cypher") as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tmp_path = tmp.name
+
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        statements = parse_cypher_shell(content)
+
+        if not statements:
+            raise HTTPException(status_code=400, detail="Tidak ada statement valid yang ditemukan di file")
+
+        # satu statement satu transaksi
+        executed = 0
+        errors = []
+        for stmt in statements:
+            try:
+                db.cypher_query(stmt)
+                executed += 1
+            except Exception as e:
+                errors.append({"statement_preview": stmt[:120], "error": str(e)})
+
+        result = {
+            "status": "success" if not errors else "partial",
+            "executed": executed,
+            "failed": len(errors),
+        }
+        if errors:
+            result["errors"] = errors[:10]  # batasin biar response ga membludak
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Restore failed: {str(e)}")
+
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+    
 @app.post('/api/extract')
 async def extract_endpoint(data: JournalRequest):
     try:
@@ -147,54 +233,48 @@ async def extract_endpoint(data: JournalRequest):
         raise HTTPException(status_code=422, detail={"errors": e.errors})
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
-    
-@app.post("/api/chat")
-async def chat_endpoint(request: Request):
-    data = await request.json()
-    user_input = data.get("message")
-    username = data.get("username")
 
-    # Step 1: LLM planning and tool decision
-    plan_variables = {"username": username, "user_input": user_input}
-    raw_plan = process_and_log(llm, data, 'retrieval_1.txt', plan_variables)
-    plan_json = parse_json_from_llm(raw_plan)
-    
-    # Step 2: Knowledge Graph retrieval
-    graph_context = ""
-    if plan_json.get("needs_tools"):
-        context_parts = []
-        for req in plan_json.get("requested_tools", []):
-            tool = req.get('tool')
-            query = req.get('search_query')
-            
-            if tool == 'get_event_patterns':
-                res = get_event_patterns(query)
-                context_parts.append(f"Events: {res}")
-            elif tool == 'get_person_dynamics':
-                res = get_person_dynamics(query)
-                context_parts.append(f"People: {res}")
-            elif tool == 'get_emotional_history':
-                res = get_emotional_history(query)
-                context_parts.append(f"Emotions: {res}")
-            elif tool == 'check_sensitivity':
-                res = check_sensitivity(query)
-                context_parts.append(f"Sensitivity: {res}")
+@app.post("/api/chat/stream")
+async def chat_stream_endpoint(req: ChatRequest):
+    print(f"\n[DEBUG] Request from: {req.user_name}")
+
+    formatted_messages = [
+        HumanMessage(content=msg.content) if msg.role == "user" else AIMessage(content=msg.content)
+        for msg in req.history
+    ]
+
+    async def event_generator():
+        try:
+            async for event in agent_executor.astream_events({"messages": formatted_messages}, version="v2"):
+                kind = event["event"]
+                
+                if kind == "on_chat_model_stream":
+                    chunk = event["data"]["chunk"]
+                    content = get_content_from_chunk(chunk, MODEL_TYPE)
+                    
+                    if content:
+                        yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
+
+                elif kind == "on_tool_start":
+                    yield f"data: {json.dumps({'type': 'tool_start', 'tool': event['name']})}\n\n"
+                
+                elif kind == "on_tool_end":
+                    yield f"data: {json.dumps({'type': 'tool_end', 'tool': event['name']})}\n\n"
         
-        graph_context = "\n".join(context_parts)
+        except Exception as e:
+            error_msg = f"Error: {str(e)}"
+            yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+        
+        finally:
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
-    # Step 3: Final streaming response
-    final_variables = {
-        "username": username,
-        "user_input": user_input,
-        "current_vibe": plan_json.get("current_vibe", "Emotional"),
-        "graph_context": graph_context or "No memories.",
-        "recent_history": ""
-    }
-
-    prompt = load_prompt(filename='retrieval_2.txt', **final_variables)
-
-    async def generate_response():
-        async for chunk in llm.astream([HumanMessage(content=prompt)]):
-            yield chunk.content
-
-    return StreamingResponse(generate_response(), media_type="text/plain")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
