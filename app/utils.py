@@ -1,8 +1,10 @@
 import os
 import json
+import time
 import uuid
-import shutil
-import tempfile
+import logging
+import requests
+from typing import List
 
 from dotenv import load_dotenv
 from string import Template
@@ -15,19 +17,67 @@ from app.exceptions.llm_exceptions import LLMSchemaValidationError
 from neomodel import db
 from app.models.graph_models import Person, EmotionType, EmotionState, Event, Entry
 
-from sentence_transformers import SentenceTransformer
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_classic.agents import create_tool_calling_agent, AgentExecutor
 
-model = SentenceTransformer('all-MiniLM-L6-v2')
+logger = logging.getLogger(__name__)
 
-def get_embedding(text: str):
-    if not text:
-        return None
-    embedding = model.encode(text)
-    return embedding.tolist()
+def get_embeddings(texts: List[str]) -> List[List[float]]:
+    """Generate vector embeddings using Jina AI API (jina-embeddings-v3)."""
+    if not texts:
+        return []
+        
+    jina_api_key = os.getenv("JINA_API_KEY")
+    if not jina_api_key:
+        logger.error("Environment variable JINA_API_KEY is missing.")
+        raise ValueError("JINA_API_KEY not found in environment variables.")
+
+    item_count = len(texts)
+    words_per_item = [len(text.split()) for text in texts]
+    total_words = sum(words_per_item)
+    
+    logger.info(
+        f"Requesting Jina AI embeddings | Total Items: {item_count} | "
+        f"Total Words: {total_words} | Words per Item: {words_per_item}"
+    )
+
+    url = "https://api.jina.ai/v1/embeddings"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {jina_api_key}"
+    }
+    payload = {
+        "model": "jina-embeddings-v3",
+        "input": texts
+    }
+
+    try:
+        # Start timer right before the network request
+        start_time = time.time()
+        response = requests.post(url, json=payload, headers=headers)
+        
+        if not response.ok:
+            logger.error(
+                f"Jina AI API failure | Status Code: {response.status_code} | "
+                f"Response Body: {response.text}"
+            )
+        response.raise_for_status()
+        
+        # Calculate elapsed time in seconds
+        elapsed_time = time.time() - start_time
+        logger.info(f"Jina AI API success | Time Took: {elapsed_time:.3f} seconds")
+        
+        response_data = response.json()
+        
+        # Sort by original index to maintain order consistency
+        sorted_data = sorted(response_data["data"], key=lambda x: x["index"])
+        return [item["embedding"] for item in sorted_data]
+
+    except requests.exceptions.RequestException as e:
+        logger.exception("An error occurred during Jina AI API request execution.")
+        raise e
 
 def load_prompt(filename, **kwargs) -> str:
     """Loads a text file and substitutes placeholders using $ syntax."""
@@ -94,25 +144,140 @@ def validate_schema(data):
 
     if errors:
         raise LLMSchemaValidationError("LLM Schema Violation", errors=errors)
+    
+def delete_entry_tree_if_exists(entry_label: str) -> bool:
+    """
+    Checks if an Entry with the given label exists. If found, performs a conditional 
+    cascade delete from the leaves upward (Person, EmotionState, EmotionType, Event, Entry).
+    Leaves are only deleted if they are exclusively connected to this specific Entry tree.
+    
+    All operations are wrapped in a transaction. If any error occurs, the changes are rolled back.
+    
+    :param entry_label: The Postgres reference ID stored in the 'label' property.
+    :return: True if the tree was found and successfully deleted, False otherwise.
+    """
+    logger.info(f"Initiating conditional cascade delete for Entry label: '{entry_label}'")
+    
+    try:
+        # Step 1: Check if the target Entry exists before opening a write transaction
+        check_query = "MATCH (e:Entry {label: $label}) RETURN e.uid LIMIT 1"
+        results, _ = db.cypher_query(check_query, {"label": entry_label})
+        
+        if not results:
+            logger.warning(f"Aborting delete operation: No Entry found with label '{entry_label}'")
+            return False
+
+        entry_uid = results[0][0]
+        logger.debug(f"Target Entry found with internal UID: {entry_uid}. Starting database transaction.")
+
+        # Step 2: Execute deletion inside an atomic transaction block
+        with db.transaction:
+            delete_query = """
+            MATCH (entry:Entry {label: $label})
+            
+            // Collect all downstream Events related to this Entry
+            OPTIONAL MATCH (entry)-[:CONTAINS]->(event:Event)
+            
+            // Collect all EmotionStates and People attached to those Events
+            OPTIONAL MATCH (event)-[:TRIGGERS]->(emotionState:EmotionState)
+            OPTIONAL MATCH (event)-[:INVOLVES]->(person:Person)
+            
+            // Collect EmotionTypes attached to those EmotionStates
+            OPTIONAL MATCH (emotionState)-[:INSTANCE_OF]->(emotionType:EmotionType)
+            
+            // -------------------------------------------------------------
+            // PHASE 1: Conditional Leaf Deletion (Degree-based check)
+            // -------------------------------------------------------------
+            
+            // 1. Handle EmotionType: Delete only if its total relationship count is exactly 1
+            // (meaning it's only connected to the EmotionState we are about to delete)
+            FOREACH (et IN CASE WHEN emotionType IS NOT NULL AND size((et)--()) = 1 THEN [emotionType] ELSE [] END |
+                DETACH DELETE et
+            )
+            
+            // 2. Handle EmotionState: Delete only if its total relationship count is <= 2
+            // (1 incoming from :Event and up to 1 outgoing to :EmotionType)
+            FOREACH (es IN CASE WHEN emotionState IS NOT NULL AND size((es)--()) <= 2 THEN [emotionState] ELSE [] END |
+                DETACH DELETE es
+            )
+            
+            // 3. Handle Person: Delete only if they are not involved in any other Event/Entry outside this tree
+            // (meaning they only have 1 relationship total)
+            FOREACH (p IN CASE WHEN person IS NOT NULL AND size((p)--()) = 1 THEN [person] ELSE [] END |
+                DETACH DELETE p
+            )
+            
+            // -------------------------------------------------------------
+            // PHASE 2: Branch & Root Deletion
+            // -------------------------------------------------------------
+            
+            // 4. Safely detach and delete all collected Events
+            FOREACH (ev IN CASE WHEN event IS NOT NULL THEN [event] ELSE [] END |
+                DETACH DELETE ev
+            )
+            
+            // 5. Finally, delete the root Entry node itself
+            DETACH DELETE entry
+            """
+            
+            logger.debug(f"Executing cascade delete Cypher query for Entry '{entry_label}'...")
+            db.cypher_query(delete_query, {"label": entry_label})
+            
+        logger.info(f"Successfully deleted Entry tree for label '{entry_label}' and all its isolated downstream nodes.")
+        return True
+    
+    except Exception as e:
+        logger.error(
+            f"Unexpected exception occurred while executing delete tree for Entry '{entry_label}': {str(e)}", 
+            exc_info=True
+        )
+        raise e
 
 def process_and_persist_graph(raw_content):
     created_nodes = {}
 
+    # Collect all texts that need embeddings and keep track of their targets
+    embedding_tasks = [] # List of tuples: (node_data_reference_id, text_to_embed)
+    
+    for node_data in raw_content['nodes']:
+        node_type = node_data['node_type']
+        props = node_data['properties']
+        ref_id = node_data['id']
+        
+        if node_type == 'Entry':
+            embedding_tasks.append((ref_id, props.get('summary')))
+        elif node_type == 'Event':
+            combined_text = f"{node_data.get('label')}: {props.get('description')}"
+            embedding_tasks.append((ref_id, combined_text))
+        elif node_type == 'EmotionState':
+            embedding_tasks.append((ref_id, props.get('description')))
+
+    # Call the batch API once if there are texts to embed
+    embedding_map = {}
+    if embedding_tasks:
+        texts_to_embed = [task[1] for task in embedding_tasks]
+        # Call the batch function we created earlier
+        vectors = get_embeddings(texts_to_embed) 
+        
+        # Map vectors back to their node's reference ID
+        for i, task in enumerate(embedding_tasks):
+            ref_id = task[0]
+            embedding_map[ref_id] = vectors[i]
+
+    # Transaction block for persisting data
     with db.transaction:
         validate_schema(raw_content)
 
         for node_data in raw_content['nodes']:
             node_type = node_data['node_type']
-            reference_id = node_data['id'] # WARNING: Expects postgre's generated ID (referentially)
+            reference_id = node_data['id']
             props = node_data['properties']
 
-            # Class mapping according to node_type
             if node_type == 'Person':
                 node = Person.find_or_create(
                     extracted_name=props.get('name'),
                     extracted_aliases=props.get('aliases', [])
                 )
-    
             elif node_type == 'EmotionType':
                 name_val = props.get('name').lower()
                 node = EmotionType.nodes.get_or_none(name=name_val)
@@ -122,22 +287,21 @@ def process_and_persist_graph(raw_content):
                 node = Entry(
                     label=reference_id,
                     summary=props.get('summary'),
-                    embedding=get_embedding(props.get('summary'))
+                    embedding=embedding_map.get(reference_id) # Use pre-calculated vector
                 ).save()
             elif node_type == 'Event':
-                combined_text = f"{node_data.get('label')}: {props.get('description')}"
                 node = Event(
-                    label=node_data.get('label'), # Use label as event title
+                    label=node_data.get('label'),
                     description=props.get('description'),
                     confidence=props.get('confidence', 1.0),
-                    embedding=get_embedding(combined_text)
+                    embedding=embedding_map.get(reference_id) # Use pre-calculated vector
                 ).save()
             elif node_type == 'EmotionState':
                 node = EmotionState(
                     description=props.get('description'),
                     intensity=props.get('intensity'),
                     valence=props.get('valence'),
-                    embedding=get_embedding(props.get('description'))
+                    embedding=embedding_map.get(reference_id) # Use pre-calculated vector
                 ).save()
             
             created_nodes[reference_id] = node
@@ -240,23 +404,19 @@ def load_llm_and_agent(tools_module):
     load_dotenv()
     
     try:
-        model_type = os.getenv("CURRENT_MODEL_TYPE", "gemini").lower()
-
-        if model_type == "openrouter":
-            llm = ChatOpenAI(
-                base_url="https://openrouter.ai/api/v1",
-                api_key=os.getenv("OPENROUTER_API_KEY"),
-                model=os.getenv("OPENROUTER_MODEL"),
-                streaming=True
+        
+        architect = ChatOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            model=os.getenv("OPENROUTER_MODEL"),
+            streaming=True
+        )
+        
+        companion = ChatGoogleGenerativeAI(
+            model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+            google_api_key=os.getenv("GOOGLE_API_KEY"),
+            temperature=0.1
             )
-        elif model_type == "gemini":
-            llm = ChatGoogleGenerativeAI(
-                model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-                google_api_key=os.getenv("GOOGLE_API_KEY"),
-                temperature=0.1
-            )
-        else:
-            raise ValueError(f"Unknown model type: {model_type}")
 
         prompt = ChatPromptTemplate.from_messages([
             (
@@ -274,12 +434,12 @@ def load_llm_and_agent(tools_module):
         ])
 
         list_tools = [
-            tools_module.get_event_patterns,
+            tools_module.get_similar_events_or_emotions,
             tools_module.get_person_dynamics,
             tools_module.get_emotional_history
         ]
 
-        agent = create_tool_calling_agent(llm, list_tools, prompt)
+        agent = create_tool_calling_agent(companion, list_tools, prompt)
         
         agent_executor = AgentExecutor(
             agent=agent, 
@@ -288,7 +448,7 @@ def load_llm_and_agent(tools_module):
             handle_parsing_errors=True
         )
 
-        return llm, agent_executor
+        return architect, companion, agent_executor
 
     except Exception as e:
         raise Exception(f"Failed to initialize Kaori components: {e}")

@@ -3,18 +3,19 @@ from neomodel import config
 
 import os
 import json
+import time
 import logging
 import shutil
 import tempfile
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, UploadFile, File, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 
 from app.schemas import JournalRequest, ChatRequest
 from app.models.graph_models import Person, Entry
-from app.utils import process_and_log, process_and_persist_graph, get_content_from_chunk, load_llm_and_agent, parse_cypher_shell
+from app.utils import process_and_log, process_and_persist_graph, get_content_from_chunk, load_llm_and_agent, parse_cypher_shell, delete_entry_tree_if_exists
 from app.exceptions.llm_exceptions import LLMSchemaValidationError
 import app.tools as tools
 
@@ -23,6 +24,8 @@ from langchain_core.messages import HumanMessage, AIMessage
 from neomodel import db
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -35,10 +38,8 @@ app.add_middleware(
 )
 
 BACKUP_DIR = os.getenv("NEO4J_BACKUP_DIR")
-MODEL_TYPE = os.getenv("MODEL_TYPE")
-MODEL_NAME = os.getenv("OPENROUTER_MODEL") if MODEL_TYPE == "openrouter" else os.getenv("GEMINI_MODEL")
 
-llm, agent_executor = load_llm_and_agent(tools)
+architect, companion, agent_executor = load_llm_and_agent(tools)
 
 config.DATABASE_URL = f"bolt://{os.getenv('NEO4J_USER')}:{os.getenv('NEO4J_PASSWORD')}@{os.getenv('NEO4J_URI').split('//')[1]}"
 
@@ -50,12 +51,10 @@ async def hello_world():
 async def say_hello():
     try:
         prompt = "Katakan 'Kaori is ready!' dengan sangat singkat."
-        response = llm.invoke(prompt)
+        response = architect.invoke(prompt)
         
         return {
             "status": "online",
-            "provider": MODEL_TYPE,
-            "model": MODEL_NAME,
             "message": response.content.strip()
         }
     except Exception as e:
@@ -128,6 +127,40 @@ async def get_entry_graph_tree(input_id: str):
                 current_event["emotions"].append(emotion_state)
 
     return tree
+
+@app.delete(
+    "/api/graph/tree/{entry_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete an entire entry graph tree conditionally",
+    description="Deletes the root Entry node, associated Events, and downstream leaves (Person/Emotion) ONLY if they are not shared with other entries."
+)
+async def delete_graph_tree_endpoint(entry_id: str):
+    try:
+        logger.info(f"Received DELETE request for graph tree with entry_id: '{entry_id}'")
+        
+        was_deleted = delete_entry_tree_if_exists(entry_label=entry_id)
+        
+        if not was_deleted:
+            logger.warning(f"DELETE failed: Graph tree with entry_id '{entry_id}' not found.")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Graph tree with entry_id '{entry_id}' does not exist."
+            )
+            
+        logger.info(f"DELETE success: Graph tree for entry_id '{entry_id}' has been cleared.")
+        return {
+            "status": "success",
+            "message": f"Graph tree for entry_id '{entry_id}' and its isolated downstream nodes have been successfully deleted."
+        }
+        
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        logger.error(f"Internal server error during DELETE for entry_id '{entry_id}': {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"InternalServerError: {type(e).__name__} - {str(e)}"
+        )
 
 @app.get("/api/graph/backup")
 async def export_graph():
@@ -213,8 +246,21 @@ async def import_graph(file: UploadFile = File(...)):
 @app.post('/api/extract')
 async def extract_endpoint(data: JournalRequest):
     try:
+        # 1. Clear existing stale tree for this entry_id if it exists
+        was_deleted = delete_entry_tree_if_exists(entry_label=data.entry_id)
+        if was_deleted:
+            logger.info(f"Stale graph tree for entry_id '{data.entry_id}' was wiped successfully.")
+        else:
+            logger.info(f"No existing graph tree found for entry_id '{data.entry_id}'. Proceeding fresh.")
+
+        pipeline_start_time = time.perf_counter()
+
+        # 2. Run the LLM Extraction process (with specific timer)
+        logger.info(f"Starting LLM Extraction for entry_id '{data.entry_id}'...")
+        llm_start_time = time.perf_counter()
+        
         result = process_and_log(
-            llm=llm,
+            llm=companion,
             data_input=data.model_dump(),
             filename='extraction.txt',
             variables={
@@ -224,14 +270,48 @@ async def extract_endpoint(data: JournalRequest):
                 "entry_text": data.entry_text
             }
         )
+        llm_duration = time.perf_counter() - llm_start_time
+        logger.info(f"✔ LLM Extraction completed in {llm_duration:.4f} seconds.")
+
+        # 3. Persist the new graph data (with specific timer)
+        logger.info(f"Starting Graph Persistence for entry_id '{data.entry_id}'...")
+        graph_start_time = time.perf_counter()
         
         process_and_persist_graph(result)
         
-        return {"status": "success", "message": "Graph data persisted successfully"}
+        graph_duration = time.perf_counter() - graph_start_time
+        logger.info(f"✔ Graph Persistence completed in {graph_duration:.4f} seconds.")
+
+        total_pipeline_duration = time.perf_counter() - pipeline_start_time
+        
+        logger.info(
+            f"=== Performance Metrics for entry_id '{data.entry_id}' ===\n"
+            f" - LLM Extraction : {llm_duration:.4f}s\n"
+            f" - Graph Persist   : {graph_duration:.4f}s\n"
+            f" - Total Pipeline  : {total_pipeline_duration:.4f}s\n"
+            f"=================================================="
+        )
+        
+        return {
+            "status": "success", 
+            "message": "Graph data persisted successfully",
+            "performance": {
+                "llm_extraction_seconds": round(llm_duration, 4),
+                "graph_persistence_seconds": round(graph_duration, 4),
+                "total_pipeline_seconds": round(total_pipeline_duration, 4)
+            }
+        }
 
     except LLMSchemaValidationError as e:
         raise HTTPException(status_code=422, detail={"errors": e.errors})
+        
     except Exception as e:
+        logger.error(f"Extraction endpoint failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
+        
+    except Exception as e:
+        # Good practice purpose: log the full stack trace on 500 errors before raising
+        logger.error(f"Extraction endpoint failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
 
 @app.post("/api/chat/stream")

@@ -72,7 +72,6 @@ class Event(StructuredNode):
     # (:Event)-[:TRIGGERS]->(:EmotionState)
     emotions = RelationshipTo('EmotionState', 'TRIGGERS')
     # TODO: (:Event)-[:LEADS_TO]->(:Event)
-    next_events = RelationshipTo('Event', 'LEADS_TO')
 
 class Entry(StructuredNode):
     """Daily journal record; Neo4J-generated id, and using Postgres-generated id as label"""
@@ -84,7 +83,3 @@ class Entry(StructuredNode):
     
     # (:Entry)-[:CONTAINS]->(:Event)
     events = RelationshipTo('Event', 'CONTAINS')
-    # (:Entry)-[:EXPRESSES]->(:EmotionState)
-    emotions = RelationshipTo('EmotionState', 'EXPRESSES')
-    # (:Entry)-[:INVOLVES]->(:Person)
-    people = RelationshipTo('Person', 'INVOLVES')

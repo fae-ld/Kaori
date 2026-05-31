@@ -21,6 +21,16 @@ services:
       - ./neo4j/data:/data
       - ./neo4j/plugins:/plugins
       - ./backups:/var/lib/neo4j/import
+      - ./init.cypher:/var/lib/neo4j/import/init.cypher
+    command: >
+          bash -c "
+          /startup/docker-entrypoint.sh neo4j &
+          echo 'Menunggu Neo4j siap...' &&
+          until wget --spider -q http://localhost:7474/; do sleep 1; done &&
+          echo 'Neo4j siap, mengeksekusi init.cypher...' &&
+          cypher-shell -u \${NEO4J_USER} -p \${NEO4J_PASSWORD} -f /var/lib/neo4j/import/init.cypher &&
+          echo 'Vector Index berhasil dikonfigurasi!' &&
+          wait"
   kaori-app:
     image: kaori:latest
     build: 
