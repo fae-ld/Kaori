@@ -144,7 +144,61 @@ def validate_schema(data):
 
     if errors:
         raise LLMSchemaValidationError("LLM Schema Violation", errors=errors)
+
+def _execute_delete_query(entry_label: str):
+    delete_query = """
+    MATCH (entry:Entry {label: $label})
     
+    // Collect downstream nodes safely using OPTIONAL MATCH
+    OPTIONAL MATCH (entry)-[:CONTAINS]->(event:Event)
+    OPTIONAL MATCH (event)-[:TRIGGERS]->(emotionState:EmotionState)
+    OPTIONAL MATCH (event)-[:INVOLVES]->(person:Person)
+    OPTIONAL MATCH (emotionState)-[:INSTANCE_OF]->(emotionType:EmotionType)
+    
+    // -------------------------------------------------------------
+    // OPTIMASI: Kumpulkan koleksi DISTINCT untuk menghindari duplikasi baris
+    // -------------------------------------------------------------
+    WITH entry,
+         collect(DISTINCT event) AS events,
+         collect(DISTINCT emotionState) AS emotionStates,
+         collect(DISTINCT person) AS people,
+         collect(DISTINCT emotionType) AS emotionTypes
+    
+    // -------------------------------------------------------------
+    // PHASE 1: Conditional Leaf Deletion (Menggunakan count{})
+    // -------------------------------------------------------------
+    
+    // 1. Handle EmotionType: Gunakan count{(et)--()} untuk mengecek jumlah relasi
+    FOREACH (et IN [x IN emotionTypes WHERE count{(x)--()} = 1] |
+        DETACH DELETE et
+    )
+    
+    // 2. Handle EmotionState: Maksimal 2 relasi
+    FOREACH (es IN [x IN emotionStates WHERE count{(x)--()} <= 2] |
+        DETACH DELETE es
+    )
+    
+    // 3. Handle Person: Hanya 1 relasi
+    FOREACH (p IN [x IN people WHERE count{(x)--()} = 1] |
+        DETACH DELETE p
+    )
+    
+    // -------------------------------------------------------------
+    // PHASE 2: Branch & Root Deletion
+    // -------------------------------------------------------------
+    
+    // 4. Hapus semua Event yang terkumpul
+    FOREACH (ev IN events |
+        DETACH DELETE ev
+    )
+    
+    // 5. Akhiri dengan menghapus root Entry
+    DETACH DELETE entry
+    """
+    
+    logger.debug(f"Executing cascade delete Cypher query for Entry '{entry_label}'...")
+    db.cypher_query(delete_query, {"label": entry_label})
+
 def delete_entry_tree_if_exists(entry_label: str) -> bool:
     """
     Checks if an Entry with the given label exists. If found, performs a conditional 
@@ -172,56 +226,7 @@ def delete_entry_tree_if_exists(entry_label: str) -> bool:
 
         # Step 2: Execute deletion inside an atomic transaction block
         with db.transaction:
-            delete_query = """
-            MATCH (entry:Entry {label: $label})
-            
-            // Collect all downstream Events related to this Entry
-            OPTIONAL MATCH (entry)-[:CONTAINS]->(event:Event)
-            
-            // Collect all EmotionStates and People attached to those Events
-            OPTIONAL MATCH (event)-[:TRIGGERS]->(emotionState:EmotionState)
-            OPTIONAL MATCH (event)-[:INVOLVES]->(person:Person)
-            
-            // Collect EmotionTypes attached to those EmotionStates
-            OPTIONAL MATCH (emotionState)-[:INSTANCE_OF]->(emotionType:EmotionType)
-            
-            // -------------------------------------------------------------
-            // PHASE 1: Conditional Leaf Deletion (Degree-based check)
-            // -------------------------------------------------------------
-            
-            // 1. Handle EmotionType: Delete only if its total relationship count is exactly 1
-            // (meaning it's only connected to the EmotionState we are about to delete)
-            FOREACH (et IN CASE WHEN emotionType IS NOT NULL AND size((et)--()) = 1 THEN [emotionType] ELSE [] END |
-                DETACH DELETE et
-            )
-            
-            // 2. Handle EmotionState: Delete only if its total relationship count is <= 2
-            // (1 incoming from :Event and up to 1 outgoing to :EmotionType)
-            FOREACH (es IN CASE WHEN emotionState IS NOT NULL AND size((es)--()) <= 2 THEN [emotionState] ELSE [] END |
-                DETACH DELETE es
-            )
-            
-            // 3. Handle Person: Delete only if they are not involved in any other Event/Entry outside this tree
-            // (meaning they only have 1 relationship total)
-            FOREACH (p IN CASE WHEN person IS NOT NULL AND size((p)--()) = 1 THEN [person] ELSE [] END |
-                DETACH DELETE p
-            )
-            
-            // -------------------------------------------------------------
-            // PHASE 2: Branch & Root Deletion
-            // -------------------------------------------------------------
-            
-            // 4. Safely detach and delete all collected Events
-            FOREACH (ev IN CASE WHEN event IS NOT NULL THEN [event] ELSE [] END |
-                DETACH DELETE ev
-            )
-            
-            // 5. Finally, delete the root Entry node itself
-            DETACH DELETE entry
-            """
-            
-            logger.debug(f"Executing cascade delete Cypher query for Entry '{entry_label}'...")
-            db.cypher_query(delete_query, {"label": entry_label})
+            _execute_delete_query(entry_label)
             
         logger.info(f"Successfully deleted Entry tree for label '{entry_label}' and all its isolated downstream nodes.")
         return True
@@ -235,6 +240,25 @@ def delete_entry_tree_if_exists(entry_label: str) -> bool:
 
 def persist_graph_and_get_emotion_types(raw_content, entry_id):
     validate_schema(raw_content)
+
+    event_nodes = [n for n in raw_content['nodes'] if n['node_type'] == 'Event']
+    
+    if len(event_nodes) > 5:
+        # Sort by significance and get only 5
+        event_nodes.sort(key=lambda x: x.get('properties', {}).get('significance', 0.0), reverse=True)
+        allowed_event_nodes = event_nodes[:5]
+        allowed_event_ids = {n['id'] for n in allowed_event_nodes}
+        
+        # Throw the rest
+        rejected_event_ids = {n['id'] for n in event_nodes[5:]}
+        raw_content['nodes'] = [
+            n for n in raw_content['nodes'] 
+            if n['node_type'] != 'Event' or n['id'] in allowed_event_ids
+        ]
+        raw_content['edges'] = [
+            e for e in raw_content['edges']
+            if e['source'] not in rejected_event_ids and e['target'] not in rejected_event_ids
+        ]
 
     created_nodes = {}
 
@@ -275,7 +299,7 @@ def persist_graph_and_get_emotion_types(raw_content, entry_id):
 
     # Transaction block for persisting data
     with db.transaction:
-        delete_entry_tree_if_exists(entry_label=entry_id)
+        _execute_delete_query(entry_label=entry_id)
         
         for node_data in raw_content['nodes']:
             node_type = node_data['node_type']
@@ -426,13 +450,14 @@ def load_llm_and_agent(tools_module):
             base_url="https://openrouter.ai/api/v1",
             api_key=os.getenv("OPENROUTER_API_KEY"),
             model=os.getenv("OPENROUTER_MODEL"),
-            streaming=True
+            # temperature=0.1
+            # streaming=True
         )
         
         companion = ChatGoogleGenerativeAI(
             model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
             google_api_key=os.getenv("GOOGLE_API_KEY"),
-            temperature=0.1
+            temperature=0.7
         )
 
         prompt = ChatPromptTemplate.from_messages([

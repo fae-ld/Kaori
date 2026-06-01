@@ -57,6 +57,10 @@ EmotionState -> INSTANCE_OF -> EmotionType
 
 📜 EXTRACTION RULES (STRICT COMPLIANCE)
 
+Event Constraint: Extract a MAXIMUM of 5 Event nodes per journal entry. 
+
+Event Selection Priority: If an entry contains more than 5 events, prioritize extracting events with the highest significance scores (0.5–1.0) or those most critical to the user's emotional state. Omit minor background details or "noise" (0.1–0.4) to maintain this limit.
+
 Fatal Schema Rule: In the edges array, you MUST use the keys "source", "target", and "relationship". Any use of "from", "to", "type", or "relationship_type" will cause system failure.
 
 Interaction Completeness: For any interaction (talking, fighting, meeting), you MUST create INVOLVES edges for ALL participants.
