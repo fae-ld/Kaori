@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse, FileResponse
 
 from app.schemas import JournalRequest, ChatRequest
 from app.models.graph_models import Person, Entry
-from app.utils import process_and_log, process_and_persist_graph, get_content_from_chunk, load_llm_and_agent, parse_cypher_shell, delete_entry_tree_if_exists
+from app.utils import process_and_log, persist_graph_and_get_emotion_types, get_content_from_chunk, get_llm_provider, load_llm_and_agent, parse_cypher_shell, delete_entry_tree_if_exists
 from app.exceptions.llm_exceptions import LLMSchemaValidationError
 import app.tools as tools
 
@@ -40,6 +40,7 @@ app.add_middleware(
 BACKUP_DIR = os.getenv("NEO4J_BACKUP_DIR")
 
 architect, companion, agent_executor = load_llm_and_agent(tools)
+provider = get_llm_provider(companion) # since agent_exec is `derived`` from companion
 
 config.DATABASE_URL = f"bolt://{os.getenv('NEO4J_USER')}:{os.getenv('NEO4J_PASSWORD')}@{os.getenv('NEO4J_URI').split('//')[1]}"
 
@@ -246,16 +247,9 @@ async def import_graph(file: UploadFile = File(...)):
 @app.post('/api/extract')
 async def extract_endpoint(data: JournalRequest):
     try:
-        # 1. Clear existing stale tree for this entry_id if it exists
-        was_deleted = delete_entry_tree_if_exists(entry_label=data.entry_id)
-        if was_deleted:
-            logger.info(f"Stale graph tree for entry_id '{data.entry_id}' was wiped successfully.")
-        else:
-            logger.info(f"No existing graph tree found for entry_id '{data.entry_id}'. Proceeding fresh.")
-
         pipeline_start_time = time.perf_counter()
 
-        # 2. Run the LLM Extraction process (with specific timer)
+        # 1. Run the LLM Extraction process FIRST
         logger.info(f"Starting LLM Extraction for entry_id '{data.entry_id}'...")
         llm_start_time = time.perf_counter()
         
@@ -273,11 +267,11 @@ async def extract_endpoint(data: JournalRequest):
         llm_duration = time.perf_counter() - llm_start_time
         logger.info(f"✔ LLM Extraction completed in {llm_duration:.4f} seconds.")
 
-        # 3. Persist the new graph data (with specific timer)
+        # 2. Persist new graph data
         logger.info(f"Starting Graph Persistence for entry_id '{data.entry_id}'...")
         graph_start_time = time.perf_counter()
         
-        process_and_persist_graph(result)
+        emotion_list = persist_graph_and_get_emotion_types(result, entry_id=data.entry_id)
         
         graph_duration = time.perf_counter() - graph_start_time
         logger.info(f"✔ Graph Persistence completed in {graph_duration:.4f} seconds.")
@@ -295,6 +289,7 @@ async def extract_endpoint(data: JournalRequest):
         return {
             "status": "success", 
             "message": "Graph data persisted successfully",
+            "emotions": emotion_list,
             "performance": {
                 "llm_extraction_seconds": round(llm_duration, 4),
                 "graph_persistence_seconds": round(graph_duration, 4),
@@ -302,17 +297,13 @@ async def extract_endpoint(data: JournalRequest):
             }
         }
 
-    except LLMSchemaValidationError as e:
-        raise HTTPException(status_code=422, detail={"errors": e.errors})
-        
     except Exception as e:
-        logger.error(f"Extraction endpoint failed: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
-        
-    except Exception as e:
-        # Good practice purpose: log the full stack trace on 500 errors before raising
-        logger.error(f"Extraction endpoint failed: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
+        logger.error(f"❌ Pipeline failed for entry_id '{data.entry_id}': {str(e)}")
+        # Mengembalikan error terstruktur ke Laravel/client
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Extraction pipeline failed: {str(e)}"
+        )
 
 @app.post("/api/chat/stream")
 async def chat_stream_endpoint(req: ChatRequest):
@@ -330,7 +321,7 @@ async def chat_stream_endpoint(req: ChatRequest):
                 
                 if kind == "on_chat_model_stream":
                     chunk = event["data"]["chunk"]
-                    content = get_content_from_chunk(chunk, MODEL_TYPE)
+                    content = get_content_from_chunk(chunk, provider)
                     
                     if content:
                         yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"

@@ -233,17 +233,26 @@ def delete_entry_tree_if_exists(entry_label: str) -> bool:
         )
         raise e
 
-def process_and_persist_graph(raw_content):
+def persist_graph_and_get_emotion_types(raw_content, entry_id):
+    validate_schema(raw_content)
+
     created_nodes = {}
 
     # Collect all texts that need embeddings and keep track of their targets
     embedding_tasks = [] # List of tuples: (node_data_reference_id, text_to_embed)
     
+    emotion_types_set = set()
+
     for node_data in raw_content['nodes']:
         node_type = node_data['node_type']
         props = node_data['properties']
         ref_id = node_data['id']
         
+        if node_type == 'EmotionType':
+            name_val = props.get('name', '').lower().strip()
+            if name_val:
+                emotion_types_set.add(name_val)
+
         if node_type == 'Entry':
             embedding_tasks.append((ref_id, props.get('summary')))
         elif node_type == 'Event':
@@ -266,8 +275,8 @@ def process_and_persist_graph(raw_content):
 
     # Transaction block for persisting data
     with db.transaction:
-        validate_schema(raw_content)
-
+        delete_entry_tree_if_exists(entry_label=entry_id)
+        
         for node_data in raw_content['nodes']:
             node_type = node_data['node_type']
             reference_id = node_data['id']
@@ -326,7 +335,7 @@ def process_and_persist_graph(raw_content):
             elif rel == 'INSTANCE_OF':
                 source_obj.emotion_type.connect(target_obj)
 
-    return True
+    return list(emotion_types_set)
 
 def process_and_log(llm, data_input, filename, variables):
     """Handles LLM execution and saves logs to temp folder."""
@@ -379,6 +388,14 @@ def parse_json_from_llm(content: str):
     except:
         return {"needs_tools": False, "current_vibe": "Sedang bercerita"}
 
+def get_llm_provider(llm_instance):
+    if isinstance(llm_instance, ChatGoogleGenerativeAI):
+        return "gemini"
+    elif isinstance(llm_instance, ChatOpenAI):
+        return "openrouter"
+    else:
+        raise TypeError(f"Unknown provider type: {type(llm_instance).__name__}")
+
 def get_content_from_chunk(chunk, model_type: str) -> str:
     """
     model_type: 'gemini' or 'openai' (default/openrouter)
@@ -416,7 +433,7 @@ def load_llm_and_agent(tools_module):
             model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
             google_api_key=os.getenv("GOOGLE_API_KEY"),
             temperature=0.1
-            )
+        )
 
         prompt = ChatPromptTemplate.from_messages([
             (
