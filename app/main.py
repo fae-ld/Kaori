@@ -214,8 +214,13 @@ async def import_graph(file: UploadFile = File(...)):
 
         if not statements:
             raise HTTPException(status_code=400, detail="Tidak ada statement valid yang ditemukan di file")
+        
+        # Clearing
+        try:
+            db.cypher_query("MATCH (n) DETACH DELETE n")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to clear db before restore: {str(e)}")
 
-        # satu statement satu transaksi
         executed = 0
         errors = []
         for stmt in statements:

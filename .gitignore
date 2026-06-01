@@ -20,3 +20,5 @@ temp/
 .todo
 
 backups/
+
+init.cypher
